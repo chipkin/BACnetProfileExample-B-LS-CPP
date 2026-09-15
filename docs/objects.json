@@ -1,0 +1,122 @@
+{
+  "objects": [
+    {
+      "type": "Analog Input",
+      "instance": 1,
+      "name": "Bronze",
+      "app": ["Present_Value", "Object_Name", "Units", "Out_Of_Service"],
+      "enabled": [],
+      "writable": [],
+      "accepted": ["Event_State"],
+      "note": "REAL, degrees Celsius; starts at 21.5"
+    },
+    {
+      "type": "Binary Input",
+      "instance": 1,
+      "name": "Emerald",
+      "app": ["Present_Value", "Object_Name", "Polarity", "Out_Of_Service"],
+      "enabled": [],
+      "writable": [],
+      "accepted": ["Event_State"],
+      "note": "starts inactive"
+    },
+    {
+      "type": "Multi-state Input",
+      "instance": 1,
+      "name": "Hot Pink",
+      "app": ["Present_Value", "Object_Name", "Number_Of_States", "Out_Of_Service", "State_Text"],
+      "enabled": ["State_Text"],
+      "writable": [],
+      "accepted": ["Event_State"],
+      "note": "state 1 of 3: On, Off, Auto"
+    },
+    {
+      "type": "Analog Output",
+      "instance": 1,
+      "name": "Chartreuse",
+      "app": ["Object_Name", "Units", "Out_Of_Service", "Relinquish_Default"],
+      "enabled": [],
+      "writable": ["Present_Value"],
+      "accepted": ["Event_State"],
+      "note": "REAL setpoint; commandable via a 16-slot Priority_Array (WriteProperty/DS-WP-B); Present_Value, Priority_Array and Current_Command_Priority are resolved by the stack from the array the app maintains"
+    },
+    {
+      "type": "Binary Output",
+      "instance": 1,
+      "name": "Fuchsia",
+      "app": ["Object_Name", "Polarity", "Out_Of_Service", "Relinquish_Default"],
+      "enabled": [],
+      "writable": ["Present_Value"],
+      "accepted": ["Event_State"],
+      "note": "active/inactive; commandable via a 16-slot Priority_Array (WriteProperty/DS-WP-B)"
+    },
+    {
+      "type": "Multi-state Output",
+      "instance": 1,
+      "name": "Indigo",
+      "app": ["Object_Name", "Number_Of_States", "Out_Of_Service", "Relinquish_Default"],
+      "enabled": [],
+      "writable": ["Present_Value"],
+      "accepted": ["Event_State"],
+      "note": "state 1..3; commandable via a 16-slot Priority_Array (WriteProperty/DS-WP-B)"
+    },
+    {
+      "type": "Lighting Output",
+      "instance": 1,
+      "name": "Jade",
+      "app": [
+        "Object_Name", "Tracking_Value", "Lighting_Command", "In_Progress",
+        "Out_Of_Service", "Blink_Warn_Enable", "Egress_Time", "Egress_Active",
+        "Default_Fade_Time", "Default_Ramp_Rate", "Default_Step_Increment",
+        "Relinquish_Default", "Lighting_Command_Default_Priority"
+      ],
+      "enabled": [],
+      "writable": ["Present_Value", "Lighting_Command"],
+      "accepted": [],
+      "note": "REAL 0-100%; commandable via a 16-slot Priority_Array (WriteProperty/DS-WP-B) AND via the typed Lighting_Command SEQUENCE (DS-LO-B). This is B-LD's canonical F-LIGHT object. Tracking_Value mirrors Present_Value in this example (an instant-completion simulation, not a real fading driver). Blink_Warn_Enable is on; Egress_Active is always false because nothing in this example drives the egress timer."
+    },
+    {
+      "type": "Channel",
+      "instance": 1,
+      "name": "Garnet",
+      "app": [
+        "Object_Name", "Last_Priority", "Write_Status", "Out_Of_Service",
+        "Channel_Number", "Control_Groups"
+      ],
+      "enabled": ["Channel_Number", "Control_Groups"],
+      "writable": ["Present_Value", "Channel_Number", "Control_Groups"],
+      "accepted": [],
+      "note": "F-CHANNEL / F-EXTWRITE (canonical). BACnetChannelValue REAL, commandable via a 16-slot Priority_Array dispatched on PROPERTY_IDENTIFIER_PRIORITY_ARRAY with an array index (NOT the usual PRESENT_VALUE+priority shape - see BACnetStack_AddChannelObject's doc and the comments in SetPropertyReal/GetPropertyReal). List_Of_Object_Property_References and Execution_Delay are stack-held, set with BACnetStack_AddObjectPropertyReferenceToChannel: one local reference to Lighting Output 1 (Jade), one remote reference to device 389016 (a B-LD instance)'s Lighting Output 1. A matching WriteGroup (service 40, DS-WG-E-B) fans a write out to both; the remote one is resolved and sent by the stack's own Device_Address_Binding, not application code (see main.cpp's header comment)."
+    },
+    {
+      "type": "Schedule",
+      "instance": 1,
+      "name": "Saffron",
+      "app": ["Object_Name", "Out_Of_Service"],
+      "enabled": [],
+      "writable": [],
+      "accepted": ["Reliability", "Present_Value", "Effective_Period", "Priority_For_Writing"],
+      "note": "F-SCHED-E (canonical). Present_Value, Effective_Period and Priority_For_Writing are genuinely served - by the STACK's own Schedule engine, configured through the dedicated API (BACnetStack_AddScheduleObject, AddScheduleWeeklyTimeValue [09:00 on / 17:00 off daily], SetScheduleDefault, SetScheduleEffectivePeriod, SetSchedulePriorityForWriting [12]) rather than a GetProperty callback, which is what this generator's simple app/stack heuristic looks for; they are listed as accepted only because the generator has no third category for 'served by a dedicated stack API, not a callback'. AddScheduleObjectPropertyReference points the Schedule at Channel 1's own Priority_Array, so a Schedule-driven write goes through the same commandable mechanism as a manual WriteProperty to Channel 1; one demo AddScheduleExceptionEventWithCalendarEntry fires a few seconds after start-up. Reliability has no fault condition this example detects, so it is accepted at the generic default (normal), the same pattern as Network Port's Reliability below."
+    },
+    {
+      "type": "Calendar",
+      "instance": 1,
+      "name": "Cream",
+      "app": ["Object_Name", "Present_Value"],
+      "enabled": [],
+      "writable": [],
+      "accepted": ["Date_List"],
+      "note": "F-SCHED-E support object. Present_Value (\"is today in Date_List\") is honestly always false: Date_List is a BACnetLIST of BACnetCalendarEntry (a variable-length list of a CHOICE type) and this stack build's customer surface has no Get callback shape that fits it (verified against CASBACnetStackDLL.h at the pin) - see TODO.md. Schedule 1's own exception-event scheduling does not depend on this: it uses the direct date/period form, AddScheduleExceptionEventWithCalendarEntry, confirmed functional in the stack's own doc comment (unlike AddScheduleExceptionEventWithCalendarReference, which the same doc comment says does not yet resolve a Calendar's Date_List - stack issue #963)."
+    },
+    {
+      "type": "Network Port",
+      "instance": 1,
+      "name": "Vermilion",
+      "app": ["Object_Name", "Out_Of_Service", "Network_Type", "Protocol_Level", "Changes_Pending"],
+      "enabled": [],
+      "writable": [],
+      "accepted": ["Reliability"],
+      "note": "BACnet/IP; Network_Type and Protocol_Level are set from BACnetStack_AddNetworkPortObject()'s arguments (IPv4, BACnet Application) at start-up, not a GetProperty callback like the object's other app-served rows; Changes_Pending is likewise computed and answered natively by the stack's Network Port object. Reliability has no fault condition this example detects, so it is accepted at the generic default (normal)"
+    }
+  ]
+}
