@@ -5,6 +5,34 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Documentation restructure.** `README.md` is cut down to this example only
+  (series-framing, the generic profile explanation, the "Before you ship"
+  table, "Get the code", "Link mode", "Troubleshooting", "Extending the
+  example", and the "Objects and properties" block moved or removed); the
+  long-form material moved to a new `TUTORIAL.md`, and the conformance
+  statement moved to a new `docs/PICS.md` (ANSI/ASHRAE 135 Annex A shape),
+  regenerated from `docs/objects.json` with a new Device object entry and
+  zero ⚠ rows. The per-field "Before you ship" guidance is now inline
+  comments in `main.cpp`'s `CHANGE ALL OF THIS BEFORE YOU SHIP` block.
+- **Build switched from a prebuilt STATIC library to the adapter's default
+  SOURCE mode.** `cmake -B build -S . && cmake --build build --config Release`
+  is now the full, single-command build on every platform - no
+  `tools/build-stack-static.sh` pre-step. `.github/workflows/release.yml`
+  drops the static-library cache/build steps and the matrix `lib:` entries,
+  asserts `CAS_BACNET_STACK_LINK=SOURCE`, and packages `TUTORIAL.md` and
+  `docs/PICS.md` alongside the binary. The published Footprint numbers are
+  still from the STATIC-linked v1.0.0 release; the next release refreshes
+  them from the SOURCE build.
+- Confirmed the `'s'` (`DemoAdvance`) interactive key is not wired to a `case`
+  in this example's key-handling loop, even though the start-up banner and
+  earlier documentation said to press it - documented as a known gap in
+  `TUTORIAL.md` and `AGENTS.md` rather than carried forward as fact. The
+  Schedule's demo exception event fires on its own regardless.
+
 ## [1.0.0] - unreleased
 
 ### Added
