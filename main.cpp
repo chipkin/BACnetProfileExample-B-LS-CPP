@@ -203,7 +203,8 @@ static const char* APP_NAME = "BACnet B-LS (Lighting Supervisor) Example - C++";
 static const char* APP_VERSION = "1.0.0";
 
 // The device instance. BACnet requires this to be configurable, so it defaults
-// to 389017 and can be overridden on the command line with --deviceID.
+// to 389017 and can be overridden on the command line with --deviceID. Keep it
+// configurable in your product: it must be unique across the internetwork.
 static uint32_t g_deviceInstance = 389017;
 
 // The remote device this example writes to, for the F-EXTWRITE demo: Channel 1
@@ -225,6 +226,9 @@ static const uint32_t REMOTE_OBJECT_INSTANCE = 1;        // B-LD's Lighting Outp
 // site announcing itself as a Chipkin demo. None of it is cosmetic:
 // Object_Name must be unique across the BACnet internetwork, and Model_Name /
 // Vendor_Identifier are what a building operator uses to identify your device.
+//
+// This block is the ship checklist. Every constant below has a note saying what
+// to change it to; nothing here is safe to leave at its example value.
 // -----------------------------------------------------------------------------
 
 // Your BACnet Vendor Identifier. 389 = Chipkin Automation Systems; change this
@@ -232,7 +236,20 @@ static const uint32_t REMOTE_OBJECT_INSTANCE = 1;        // B-LD's Lighting Outp
 // by ASHRAE - request one (free) at https://bacnet.org/assigned-vendor-ids/.
 // Update VENDOR_NAME below to match.
 static const uint32_t VENDOR_IDENTIFIER = 389;
+
+// The Device object's Object_Name.
+//
+// THIS IS THE ONE THAT WILL BITE YOU. Object_Name must be unique across the
+// whole BACnet internetwork, and here it is a COMPILE-TIME constant. The device
+// instance is runtime-configurable via --deviceID, so it is easy to ship two
+// units, configure their instances correctly, and still have BOTH announce
+// Object_Name "Rainbow" - a spec violation, and a hard BTL failure. In a real
+// product Object_Name must be per-unit configurable too: derive it from a serial
+// number, DIP switches, a config file, or add a --deviceName argument.
 static const char* DEVICE_NAME = "Rainbow";
+
+// The Device object's Description. Change it to what YOUR device actually is;
+// this string describes this tutorial and its Channel/Schedule fan-out.
 static const char* DEVICE_DESCRIPTION =
     "Chipkin CAS BACnet Stack Example - B-LS (Lighting Supervisor) profile. Supervises "
     "a scene of lights through a Channel object that fans an incoming WriteGroup out to "
@@ -240,14 +257,22 @@ static const char* DEVICE_DESCRIPTION =
     "the same fan-out automatically, on a timer, including to the remote device.";
 
 // Device identity strings (read by clients, and used to populate I-Am).
+//   VENDOR_NAME - your company name; it must match VENDOR_IDENTIFIER above.
+//   MODEL_NAME  - your model designation. This is what a building operator reads
+//                 to identify your device in a discovery tool.
 static const char* VENDOR_NAME = "Chipkin Automation Systems";
 static const char* MODEL_NAME = "CAS BACnet Stack Example - B-LS";
 
 // DeviceCommunicationControl password. A management station may include a password
 // with a DeviceCommunicationControl (or ReinitializeDevice) request; the device
 // accepts the command only if it matches. Set to NULL/empty to accept any request
-// (no password required). Change this to your device's secret before shipping.
+// (no password required). Change this to your device's secret before shipping -
+// it crosses the wire in PLAINTEXT, so treat it as a guard against accidents,
+// not a security boundary.
 static const char* DCC_PASSWORD = "";  // "" = no password required
+
+// FIRMWARE_REVISION / APPLICATION_SOFTWARE_VERSION - your real versions. Wire
+// them to your build rather than hard-coding a number that will go stale.
 static const char* FIRMWARE_REVISION = "1.0.0";
 static const char* APPLICATION_SOFTWARE_VERSION = "1.0.0";
 

@@ -2,7 +2,7 @@
 
 Guidance for AI coding agents working in this repository. See
 <https://agents.md/> for the format. Human contributors should read
-[README.md](README.md) first.
+[README.md](README.md) first, then [TUTORIAL.md](TUTORIAL.md).
 
 ## What this project is
 
@@ -19,37 +19,39 @@ This repository is self-contained:
 
 - `main.cpp` - the example device.
 - `common/` - the shared helper (vendored).
+- `README.md` - what this example is. Keep it short and about THIS example only.
+- `TUTORIAL.md` - how to extend and review the example. Long-form material that
+  would bloat the README belongs here.
+- `docs/PICS.md` - the Protocol Implementation Conformance Statement. Its
+  objects-and-properties section is GENERATED from `docs/objects.json`; do not
+  hand-edit between the `OBJECTS-PROPERTIES` markers.
+- `docs/objects.json` - the input to that generator. Update it in the same change
+  as any `main.cpp` change that adds an object or a `GetProperty*` branch.
 - `submodules/cas-bacnet-stack/` - the **CAS BACnet Stack** as a git submodule
   (private; compiled from source). After cloning, run
   `git submodule update --init --recursive`.
 
+The `PROFILE-TABLE` block in README.md is also generated, from the example-series
+repository's `docs/profile-table.md`. Edit it there, not here.
+
 ## Build
 
-This example links the CAS BACnet Stack as a prebuilt **STATIC** library - build
-the library once from the pinned submodule commit, then configure and build:
+Plain CMake, identical on every platform, in the adapter's default SOURCE mode
+(the stack's sources are compiled into the executable - no prebuilt library, no
+DLL, no per-platform pre-step):
 
 ```bash
 git submodule update --init --recursive   # once, if not cloned with --recursive
-tools/build-stack-static.sh BACnetProfileExample-B-LS-CPP   # from the series root
-cmake -B build -S . -DCAS_BACNET_STACK_LINK=STATIC
+cmake -B build -S .
 cmake --build build --config Release
 ```
 
-The stack library build compiles the whole stack (~600 files) once and takes a
-few minutes; the example itself then builds in seconds, and later incremental
-rebuilds are fast. Use `-D CAS_STACK_DIR=...` only if your stack lives outside
-the bundled submodule. The adapter also offers a SOURCE mode (compiles the
-stack straight into the executable, no library build); this example builds and
-ships STATIC only.
-
-**Toolset note (this pin, this series):** if `link.exe` fails with
-`LNK1257`/`C1900 IL mismatch`, the prebuilt `.lib` and the example were built
-with two different Visual Studio installations (this machine has 2019, 2022,
-and a newer "2026"/v145 release side by side; `vswhere -latest` picks the
-newest one, which does not match CMake's own VS2022 compiler resolution).
-Force both to the same one: `MSBUILD="/c/.../2022/BuildTools/MSBuild/Current/Bin/MSBuild.exe"
-TOOLSET=v143 tools/build-stack-static.sh ...`, matching whatever CMake's
-`Visual Studio 17 2022` generator resolves to.
+The first build compiles the whole stack (~600 files) and takes a few minutes;
+rebuilds after that are incremental and fast. Use `-D CAS_STACK_DIR=...` only if
+your stack lives outside the bundled submodule. Do not reintroduce a link-mode
+flag or a series-root build script into the documented build: a customer
+downloads this repository on its own and must be able to build it with the two
+commands above.
 
 ## Run
 
@@ -60,7 +62,10 @@ TOOLSET=v143 tools/build-stack-static.sh ...`, matching whatever CMake's
 
 Interactive keys: `h` help, `q` quit, up/down nudge Analog Input 1, `w` fire a
 demo WriteGroup at Channel 1, `d` send a demo Who-Is to discover the remote
-device, `s` jump the demo Schedule to its exception event.
+device. (`common/`'s `KeyCommand::DemoAdvance` / `'s'` is not wired to a `case`
+in this `main.cpp`'s key-handling loop - pressing it is currently a no-op; the
+Schedule's demo exception event fires on its own by wall clock regardless. See
+[TUTORIAL.md](TUTORIAL.md#troubleshooting).)
 
 ## The stack pin is not optional here
 
@@ -127,10 +132,15 @@ There are no unit tests; verification is behavioural:
    an automated/piped stdin): confirm Lighting Output 1 (Jade) updates
    locally, and watch for a WriteProperty reaching the second instance.
 5. Confirm the Schedule's demo exception event fires a few seconds after
-   start-up (or press `'s'`) and writes Channel 1 - this one is easy to
-   observe without a second instance or an external client.
+   start-up and writes Channel 1 - this one is easy to observe without a
+   second instance or an external client, and does not depend on the `'s'`
+   key (see the Conventions note above).
 6. Confirm services that are not enabled (e.g. ReadPropertyMultiple, SubscribeCOV)
    are rejected.
+7. If you changed the objects or their properties, regenerate `docs/PICS.md`
+   (`python tools/gen-objects-properties.py BACnetProfileExample-B-LS-CPP` from
+   the series root) and confirm no row comes out flagged with ⚠. Check it is
+   current with `... --check` before committing.
 
 ## Releasing
 
@@ -139,6 +149,5 @@ then tag `vX.Y.Z`. The GitHub Actions workflow builds and publishes the release.
 
 ## License
 
-The example source code is dedicated to the public domain under
-[CC0-1.0](LICENSE). The CAS BACnet Stack is a separate, commercially licensed
-product and is not covered by that dedication.
+See [LICENSE](LICENSE). The CAS BACnet Stack is a separate, commercially
+licensed product and is not covered by it.
