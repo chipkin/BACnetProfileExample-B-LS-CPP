@@ -173,10 +173,6 @@ static const uint32_t PROPERTY_IDENTIFIER_LIGHTING_COMMAND = 380;
 static const uint32_t PROPERTY_IDENTIFIER_LIGHTING_COMMAND_DEFAULT_PRIORITY = 381;
 static const uint32_t PROPERTY_IDENTIFIER_EGRESS_ACTIVE = 386;
 
-// -- F-TIMESYNC: Local_Date / Local_Time property identifiers (Device object) --
-static const uint32_t PROPERTY_IDENTIFIER_LOCAL_DATE = 56;
-static const uint32_t PROPERTY_IDENTIFIER_LOCAL_TIME = 57;
-
 // -- BACnetLightingOperation - what a Lighting_Command tells the light to DO --
 //    Full list: submodules/cas-bacnet-stack/source/BACnetLightingOperation.h
 static const uint32_t LIGHTING_OPERATION_NONE = 0;
