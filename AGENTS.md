@@ -82,7 +82,7 @@ that comment, not an assumption this file is still accurate.
 
 ## Conventions
 
-- Device is named "Rainbow"; objects use the series' colour names (Channel is
+- Device is named "Chipkin Example B-LS"; objects use the series' colour names (Channel is
   "Garnet", Schedule "Saffron", Calendar "Cream", the seeded Lighting Output
   "Jade"); vendor id 389; device instance **389017**.
 - Implement **only** what B-LS requires - DS-RP-B, DS-WP-A, DS-WP-B, DS-WG-E-B,

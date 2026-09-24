@@ -63,7 +63,7 @@
 // (from B-LD), a Channel, a Schedule, and a Calendar. Each object has a colour
 // name (the convention shared across this example series):
 //
-//     Device 389017            "Rainbow"     (instance configurable with --deviceID)
+//     Device 389017            "Chipkin Example B-LS"     (instance configurable with --deviceID)
 //     Analog Input  1          "Bronze"      (REAL, degrees Celsius; read-only)
 //     Binary Input  1          "Emerald"     (active / inactive; read-only)
 //     Multi-State Input 1      "Hot Pink"    (state 1..3; read-only)
@@ -118,6 +118,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <string>
 #include <time.h>  // F-TIMESYNC: InitSyncedDateTimeFromHost() seeds Local_Date/Local_Time
 
 #if defined(_WIN32)
@@ -172,10 +173,6 @@ static const uint32_t PROPERTY_IDENTIFIER_LIGHTING_COMMAND = 380;
 static const uint32_t PROPERTY_IDENTIFIER_LIGHTING_COMMAND_DEFAULT_PRIORITY = 381;
 static const uint32_t PROPERTY_IDENTIFIER_EGRESS_ACTIVE = 386;
 
-// -- F-TIMESYNC: Local_Date / Local_Time property identifiers (Device object) --
-static const uint32_t PROPERTY_IDENTIFIER_LOCAL_DATE = 56;
-static const uint32_t PROPERTY_IDENTIFIER_LOCAL_TIME = 57;
-
 // -- BACnetLightingOperation - what a Lighting_Command tells the light to DO --
 //    Full list: submodules/cas-bacnet-stack/source/BACnetLightingOperation.h
 static const uint32_t LIGHTING_OPERATION_NONE = 0;
@@ -200,7 +197,7 @@ static const uint32_t LIGHTING_IN_PROGRESS_RAMP_ACTIVE = 2;
 // 1. Example + device configuration
 // -----------------------------------------------------------------------------
 static const char* APP_NAME = "BACnet B-LS (Lighting Supervisor) Example - C++";
-static const char* APP_VERSION = "1.0.0";
+static const char* APP_VERSION = "1.0.2";
 
 // The device instance. BACnet requires this to be configurable, so it defaults
 // to 389017 and can be overridden on the command line with --deviceID. Keep it
@@ -243,10 +240,10 @@ static const uint32_t VENDOR_IDENTIFIER = 389;
 // whole BACnet internetwork, and here it is a COMPILE-TIME constant. The device
 // instance is runtime-configurable via --deviceID, so it is easy to ship two
 // units, configure their instances correctly, and still have BOTH announce
-// Object_Name "Rainbow" - a spec violation, and a hard BTL failure. In a real
+// Object_Name "Chipkin Example B-LS" - a spec violation, and a hard BTL failure. In a real
 // product Object_Name must be per-unit configurable too: derive it from a serial
 // number, DIP switches, a config file, or add a --deviceName argument.
-static const char* DEVICE_NAME = "Rainbow";
+static const char* DEVICE_NAME = "Chipkin Example B-LS";
 
 // The Device object's Description. Change it to what YOUR device actually is;
 // this string describes this tutorial and its Channel/Schedule fan-out.
@@ -271,10 +268,20 @@ static const char* MODEL_NAME = "CAS BACnet Stack Example - B-LS";
 // not a security boundary.
 static const char* DCC_PASSWORD = "";  // "" = no password required
 
-// FIRMWARE_REVISION / APPLICATION_SOFTWARE_VERSION - your real versions. Wire
-// them to your build rather than hard-coding a number that will go stale.
-static const char* FIRMWARE_REVISION = "1.0.0";
-static const char* APPLICATION_SOFTWARE_VERSION = "1.0.0";
+// Application_Software_Version (12) is just APP_VERSION - one source of
+// truth, so it can never drift from what --version/the startup banner
+// prints (it did drift: this used to be a separate hardcoded "1.0.0"
+// constant nobody updated across patch releases).
+//
+// Firmware_Revision (44) is meant to name the underlying platform/stack,
+// not this example's own version - built at runtime from the CAS BACnet
+// Stack's own BACnetStack_GetAPIMajorVersion()/etc. (the same 4 calls
+// common/CASExampleHelper.cpp's PrintVersion() already uses for the
+// startup banner's "CAS BACnet Stack version: X.Y.Z.W" line), so it can
+// never go stale either - see g_firmwareRevision below, populated once
+// right after LoadBACnetFunctions() succeeds (those functions are what
+// the version getters themselves are, so they must be loaded first).
+static std::string g_firmwareRevision;
 
 // The sensor objects (all instance 1) and their colour names.
 static const uint32_t ANALOG_INPUT_INSTANCE = 1;       // "Bronze"
@@ -1022,9 +1029,9 @@ bool GetPropertyCharString(const uint32_t deviceInstance, const uint16_t objectT
             case PROPERTY_IDENTIFIER_MODEL_NAME:
                 return ReturnCharacterString(MODEL_NAME, value, valueElementCount, maxElementCount, encodingType);
             case PROPERTY_IDENTIFIER_FIRMWARE_REVISION:
-                return ReturnCharacterString(FIRMWARE_REVISION, value, valueElementCount, maxElementCount, encodingType);
+                return ReturnCharacterString(g_firmwareRevision.c_str(), value, valueElementCount, maxElementCount, encodingType);
             case PROPERTY_IDENTIFIER_APPLICATION_SOFTWARE_VERSION:
-                return ReturnCharacterString(APPLICATION_SOFTWARE_VERSION, value, valueElementCount, maxElementCount, encodingType);
+                return ReturnCharacterString(APP_VERSION, value, valueElementCount, maxElementCount, encodingType);
             default:
                 break;
         }
@@ -1706,6 +1713,19 @@ int main(int argc, char** argv) {
         fprintf(stderr, "Error: failed to load the CAS BACnet Stack: %s\n",
                 CASBACnetStackAdapter_LastError());
         return 1;
+    }
+
+    // g_firmwareRevision (Device object property 44) - see its own doc
+    // comment above for why this is the STACK's version, not this example's
+    // own (that's Application_Software_Version/APP_VERSION instead). Must
+    // happen after LoadBACnetFunctions() (these getters ARE some of the
+    // functions it loads) and before the Device object is ever readable.
+    {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%u.%u.%u.%u",
+                 BACnetStack_GetAPIMajorVersion(), BACnetStack_GetAPIMinorVersion(),
+                 BACnetStack_GetAPIPatchVersion(), BACnetStack_GetAPIBuildVersion());
+        g_firmwareRevision = buf;
     }
 
     // --- Command line + version --------------------------------------------

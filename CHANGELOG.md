@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] - unreleased
+
+### Changed
+
+- **Device renamed from the series' colour placeholder "Rainbow" to "Chipkin
+  Example B-LS"** so devices from different examples in the series are
+  distinguishable from each other on the same BACnet network - every example
+  previously announced the identical Object_Name "Rainbow", which made two
+  examples on one subnet indistinguishable by name. Sub-object names (Analog
+  Input 1 "Bronze", etc.) are unchanged - only the Device object's name
+  changed. `docs/colour-table.md` (series root) updated to match. APP_VERSION
+  bumped 1.0.1 -> 1.0.2.
+
 ## [Unreleased]
 
 ### Changed
@@ -32,6 +45,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   earlier documentation said to press it - documented as a known gap in
   `TUTORIAL.md` and `AGENTS.md` rather than carried forward as fact. The
   Schedule's demo exception event fires on its own regardless.
+
+## [1.0.1] - unreleased
+
+### Fixed
+
+- **`Application_Software_Version` (12) and `Firmware_Revision` (44) were
+  hardcoded and stale.** Both were separate `static const char*` constants
+  set to a literal `"1.0.0"` that nobody would ever update as the example
+  moved past that release. Fixed: `Application_Software_Version` now reads
+  `APP_VERSION` directly (one source of truth, can't drift from `--version`'s
+  own banner again). `Firmware_Revision` is now built at runtime from the CAS
+  BACnet Stack's own `BACnetStack_GetAPIMajorVersion()`/`GetAPIMinorVersion()`/
+  `GetAPIPatchVersion()`/`GetAPIBuildVersion()` (the same 4 calls
+  `common/CASExampleHelper.cpp`'s `PrintVersion()` already uses for the
+  startup banner), populated once into `g_firmwareRevision` right after
+  `LoadBACnetFunctions()` succeeds. The old separate `FIRMWARE_REVISION` /
+  `APPLICATION_SOFTWARE_VERSION` constants are removed entirely. Verified
+  with a clean build plus a real ReadProperty against the running device
+  (via `bacpypes3`, port 47825, device instance 389017):
+  `Application_Software_Version = "1.0.1"`, `Firmware_Revision = "6.0.21.0"`
+  - both now match the actual running build instead of a stale hardcoded
+  string.
 
 ## [1.0.0] - unreleased
 
