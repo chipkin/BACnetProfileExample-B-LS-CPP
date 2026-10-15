@@ -18,17 +18,21 @@ see [README.md](../README.md).
 | **Vendor Identifier** | 389 |
 | **Product Name** | CAS BACnet Stack Example - B-LS |
 | **Product Model Number** | CAS BACnet Stack Example - B-LS |
-| **Application Software Version** | 1.0.0 |
-| **Firmware Revision** | 1.0.0 |
+| **Application Software Version** | 1.1.0 |
+| **Firmware Revision** | 6.0.23.0 (the CAS BACnet Stack version) |
 | **BACnet Protocol Version** | 1 |
-| **BACnet Protocol Revision** | 24 |
+| **BACnet Protocol Revision** | 30 |
 
 **Product Description:** a BACnet/IP Lighting Supervisor built on the CAS
 BACnet Stack. It presents the B-SA-style read-only sensors and commandable
 outputs, a Lighting Output ("Jade"), a Channel ("Garnet") that fans a
 WriteGroup out to Jade and to a remote device's Lighting Output
-(F-CHANNEL / F-EXTWRITE), and a Schedule ("Saffron") plus Calendar ("Cream")
-that drive the same fan-out automatically (F-SCHED-E). It is a tutorial for
+(F-CHANNEL / F-EXTWRITE), and a Schedule ("Saffron") that writes the Channel
+on a timer (F-SCHED-E), plus a Calendar ("Cream"). At stack `6.x` @
+`64b2cfac5` only a WriteGroup fans out to the Channel's members; the
+Schedule's write and a WriteProperty to the Channel are stored but not
+propagated (a stack defect, see TODO.md), and the remote write has not been
+seen on the wire yet. It is a tutorial for
 implementers of the B-LS profile and the series' canonical implementation of
 F-CHANNEL, F-EXTWRITE and F-SCHED-E.
 
@@ -87,9 +91,15 @@ the profile boundary, not a limitation to work around.
 
 ## 5. Segmentation capability
 
-Segmentation is **not supported** in either direction
-(`Segmentation_Supported` = `no-segmentation`, the stack's configured default -
-this example does not override it). `Max_APDU_Length_Accepted` is 1476
+Segmentation is **supported in both directions**
+(`Segmentation_Supported` = `segmented-both`), by the stack: at `6.x` @
+`64b2cfac5` the customer build compiles `STACK_OPTION_SEGMENTATION` in (stack
+#2992), and this example keeps the stack's defaults for `Max_Segments_Accepted`
+and `APDU_Segment_Timeout`. Table 12-13 footnote 1: "These properties are
+required if, and shall be present only if, segmentation of any kind is
+supported" - they are not rows in section 11 because its generator lists only
+unconditionally required properties. (At the previous pin, `abd4cee1`, this
+example answered `no-segmentation`.) `Max_APDU_Length_Accepted` is 1476
 octets, the BACnet/IP maximum (`MAX_APDU_LENGTH` in `main.cpp`).
 
 ## 6. Standard object types supported
@@ -173,7 +183,7 @@ Every object this example creates, and every REQUIRED property of each (per ANSI
 | Protocol_Object_Types_Supported | BACnetObjectTypesSupported | stack | no |
 | Object_List | BACnetARRAY[N] of BACnetObjectIdentifier | stack | no |
 | Max_APDU_Length_Accepted | Unsigned | stack default, accepted (`CAS_BACNET_DEVICE_DEFAULT_MAX_APDU_LENGTH_ACCEPTED`) | no |
-| Segmentation_Supported | BACnetSegmentation | stack default, accepted (`BACnetSegmentation::noSegmentation`) | no |
+| Segmentation_Supported | BACnetSegmentation | stack default, accepted (`BACnetSegmentation::segmentedBoth` with `STACK_OPTION_SEGME) | no |
 | APDU_Timeout | Unsigned | stack default, accepted (`CAS_BACNET_DEVICE_DEFAULT_APDU_TIMEOUT`) | no |
 | Number_Of_APDU_Retries | Unsigned | stack default, accepted (`CAS_BACNET_DEVICE_DEFAULT_NUMBER_OF_APDU_RETRIES`) | no |
 | Device_Address_Binding | BACnetLIST of BACnetAddressBinding | stack | no |
@@ -297,7 +307,7 @@ Every object this example creates, and every REQUIRED property of each (per ANSI
 | Relinquish_Default | Real | app | no |
 | Lighting_Command_Default_Priority | Unsigned | app | no |
 
-### Channel 1 "Garnet" - F-CHANNEL / F-EXTWRITE (canonical). BACnetChannelValue REAL, commandable via a 16-slot Priority_Array dispatched on PROPERTY_IDENTIFIER_PRIORITY_ARRAY with an array index (NOT the usual PRESENT_VALUE+priority shape - see BACnetStack_AddChannelObject's doc and the comments in SetPropertyReal/GetPropertyReal). List_Of_Object_Property_References and Execution_Delay are stack-held, set with BACnetStack_AddObjectPropertyReferenceToChannel: one local reference to Lighting Output 1 (Jade), one remote reference to device 389016 (a B-LD instance)'s Lighting Output 1. A matching WriteGroup (service 40, DS-WG-E-B) fans a write out to both; the remote one is resolved and sent by the stack's own Device_Address_Binding, not application code (see main.cpp's header comment).
+### Channel 1 "Garnet" - F-CHANNEL / F-EXTWRITE (canonical). BACnetChannelValue REAL, commandable via a 16-slot Priority_Array the application holds. The stack's Schedule writes it on PROPERTY_IDENTIFIER_PRIORITY_ARRAY with an array index (as BACnetStack_AddChannelObject's doc says); at 64b2cfac5 a client WriteProperty and a WriteGroup arrive on PRESENT_VALUE with a priority instead, so SetPropertyReal/SetPropertyNull accept both (see their comments and TODO.md). List_Of_Object_Property_References and Execution_Delay are stack-held, set with BACnetStack_AddObjectPropertyReferenceToChannel: one local reference to Lighting Output 1 (Jade), one remote reference to device 389016 (a B-LD instance)'s Lighting Output 1. A matching WriteGroup (service 40, DS-WG-E-B) fans a write out to both (the local one is confirmed at 64b2cfac5; the remote one, resolved and sent by the stack's own Device_Address_Binding, has not been seen on the wire yet). A WriteProperty or Schedule write to Present_Value is not propagated at this pin, contrary to cl. 12.53.5 (stack defect, TODO.md).
 
 | Property | Datatype | Served by | Writable |
 |---|---|---|:---:|
@@ -314,7 +324,7 @@ Every object this example creates, and every REQUIRED property of each (per ANSI
 | Control_Groups | BACnetARRAY[N] of Unsigned32 | app | yes |
 | Property_List | BACnetARRAY[N] of BACnetPropertyIdentifier | stack | no |
 
-### Schedule 1 "Saffron" - F-SCHED-E (canonical). Present_Value, Effective_Period and Priority_For_Writing are genuinely served - by the STACK's own Schedule engine, configured through the dedicated API (BACnetStack_AddScheduleObject, AddScheduleWeeklyTimeValue [09:00 on / 17:00 off daily], SetScheduleDefault, SetScheduleEffectivePeriod, SetSchedulePriorityForWriting [12]) rather than a GetProperty callback, which is what this generator's simple app/stack heuristic looks for; they are listed as accepted only because the generator has no third category for 'served by a dedicated stack API, not a callback'. AddScheduleObjectPropertyReference points the Schedule at Channel 1's own Priority_Array, so a Schedule-driven write goes through the same commandable mechanism as a manual WriteProperty to Channel 1; one demo AddScheduleExceptionEventWithCalendarEntry fires a few seconds after start-up. Reliability has no fault condition this example detects, so it is accepted at the generic default (normal), the same pattern as Network Port's Reliability below.
+### Schedule 1 "Saffron" - F-SCHED-E (canonical). Present_Value, Effective_Period and Priority_For_Writing are genuinely served - by the STACK's own Schedule engine, configured through the dedicated API (BACnetStack_AddScheduleObject, AddScheduleWeeklyTimeValue [09:00 on / 17:00 off daily], SetScheduleDefault, SetScheduleEffectivePeriod, SetSchedulePriorityForWriting [12]) rather than a GetProperty callback, which is what this generator's simple app/stack heuristic looks for; they are listed as accepted only because the generator has no third category for 'served by a dedicated stack API, not a callback'. AddScheduleObjectPropertyReference points the Schedule at Channel 1's own Priority_Array, so a Schedule-driven write goes through the same commandable mechanism as a manual WriteProperty to Channel 1; one demo AddScheduleExceptionEventWithCalendarEntry covers today from 00:00:05, so it is in effect from start-up. At 64b2cfac5 the Schedule's write is stored on Channel 1 but not propagated to its members (stack defect, TODO.md). Reliability has no fault condition this example detects, so it is accepted at the generic default (normal), the same pattern as Network Port's Reliability below.
 
 | Property | Datatype | Served by | Writable |
 |---|---|---|:---:|

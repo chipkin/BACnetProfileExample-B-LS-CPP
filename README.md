@@ -8,11 +8,30 @@ A **B-LS supervises other lights**: it does not have a Lighting Output of its
 own to command by hand (well - it does, "Jade", for the demo - see below) so
 much as it commands OTHER devices' lights, in bulk, via a **Channel** object
 that a **WriteGroup** request fans out to several targets at once, including a
-**remote** device on another BACnet subnet, and a **Schedule** that fires the
-same fan-out automatically on a timer. This example is the series' **canonical
-implementation of F-CHANNEL, F-EXTWRITE, and F-SCHED-E** - a later example
-that needs a Channel object, a cross-device (remote) object reference, or a
-Schedule that executes a write copies the relevant section here.
+**remote** device, and a **Schedule** that writes the Channel on a timer. This
+example is the series' **canonical implementation of F-CHANNEL, F-EXTWRITE, and
+F-SCHED-E** - a later example that needs a Channel object, a cross-device
+(remote) object reference, or a Schedule that executes a write copies the
+relevant section here.
+
+> **What works at this Stack Pin, and what does not** (checked 2026-10-15 at
+> `6.x` @ `64b2cfac5`; details and evidence in [TODO.md](TODO.md)):
+>
+> - **A WriteGroup fans out to the local Lighting Output.** Pressing `'w'`
+>   (Linux) sends a WriteGroup that Channel 1 matches, and Jade goes from 0 % to
+>   100 %. This needs the stack compiled with `STACK_OPTION_WRITE_GROUP`, which
+>   the stack's default preset leaves out; this example's CMake turns it on (see
+>   [Build](#build)).
+> - **The remote fan-out has not been seen working.** No test has run a second
+>   device yet, and the Who-Is the stack sends to find device 389016 goes to this
+>   host's own address rather than the subnet broadcast (a known `common/`
+>   defect, stack #3933), so the binding may never resolve.
+> - **The Schedule does not drive the fan-out.** It writes Channel 1's
+>   Present_Value, but the stack propagates a Channel write to its members only
+>   for a WriteGroup. 135-2024 cl. 12.53.5 says any write to Present_Value
+>   propagates; that is a stack defect, recorded in TODO.md.
+> - **A WriteProperty to Channel 1** is accepted and stored, but for the same
+>   reason it is not propagated to Jade or the remote device.
 
 **[Download a prebuilt binary](https://github.com/chipkin/BACnetProfileExample-B-LS-CPP/releases)**
 (Windows and Linux x64) - or build it yourself, see [Build](#build) below.
@@ -22,9 +41,9 @@ Schedule that executes a write copies the relevant section here.
 - **[docs/PICS.md](docs/PICS.md)** - the Protocol Implementation Conformance
   Statement: every object, every property, and who answers it.
 
-> **Versions:** this document describes **example v1.0.0**, built and verified
-> against **CAS BACnet Stack 6.0.21** (`6.x` @ `abd4cee1`), at
-> **Protocol_Revision 24**, with the vendored `common/` helper at **v2.5.0**.
+> **Versions:** this document describes **example v1.1.0**, built and verified
+> against **CAS BACnet Stack 6.0.23** (`6.x` @ `64b2cfac5`), at
+> **Protocol_Revision 30**, with the vendored `common/` helper at **v3.3.0**.
 > Running the example prints all three - if what it prints disagrees with this
 > line, trust the program and check `CHANGELOG.md`.
 
@@ -39,11 +58,11 @@ Schedule that executes a write copies the relevant section here.
 | Required BIBB | What it means | How this example does it |
 |---|---|---|
 | **DS-RP-B** | Execute ReadProperty | `SERVICE_READ_PROPERTY`; `GetProperty*` callbacks |
-| **DS-WP-A** | Initiate WriteProperty | the `'w'`/`'d'` demo keys - `BACnetStack_SendWriteGroup` / `SendWhoIs` |
+| **DS-WP-A** | Initiate WriteProperty | the stack, when a WriteGroup reaches Channel 1 and its remote reference names device 389016 (Device_Address_Binding). `main.cpp` never calls `SendWriteProperty`; the `'w'`/`'d'` keys send a WriteGroup and a Who-Is. Not yet seen on the wire (see above) |
 | **DS-WP-B** | Execute WriteProperty | `SERVICE_WRITE_PROPERTY`; `SetProperty*` callbacks |
 | **DS-WG-E-B** | Execute WriteGroup (the defining BIBB) | `SERVICE_WRITE_GROUP`; Channel 1 ("Garnet") fans the write out |
-| **DS-ALO-A** | Initiate a write to a remote (lighting) output | the same A-side WriteProperty/WriteGroup path as DS-WP-A |
-| **SCHED-E-B** | Execute a Schedule | Schedule 1 ("Saffron") drives the same fan-out on a timer |
+| **DS-ALO-A** | Initiate a write to a remote (lighting) output | the same stack-initiated WriteProperty as DS-WP-A; not yet seen on the wire |
+| **SCHED-E-B** | Execute a Schedule | Schedule 1 ("Saffron") writes Channel 1's Present_Value at priority 12 (no fan-out at this pin, see above) |
 | **DM-DDB-A** | Initiate Who-Is | the `'d'` demo key - `BACnetStack_SendWhoIs` |
 | **DM-DDB-B** | Answer Who-Is with I-Am | Handled by the stack; plus an unsolicited I-Am on start-up |
 | **DM-DOB-B** | Answer Who-Has with I-Have | Handled by the stack |
@@ -66,7 +85,7 @@ SubscribeCOV, alarms and events, trending, backup/restore.
 | Multi-State Output | 1 | Indigo | state 1..3; WRITABLE, commandable |
 | Lighting Output | 1 | Jade | REAL 0–100 %; WRITABLE, commandable (from B-LD; the local WriteGroup/Schedule target) |
 | **Channel** | **1** | **Garnet** | **BACnetChannelValue REAL; WRITABLE, commandable - fans a WriteGroup out to Jade AND a remote device (F-CHANNEL / F-EXTWRITE)** |
-| **Schedule** | **1** | **Saffron** | **Drives a write to Channel 1 on a timer, including the remote fan-out (F-SCHED-E)** |
+| **Schedule** | **1** | **Saffron** | **Writes Channel 1's Present_Value on a timer (F-SCHED-E); at this pin the write is not propagated to Channel 1's members** |
 | **Calendar** | **1** | **Cream** | **A real, independently-readable Calendar object - see [TUTORIAL.md](TUTORIAL.md#troubleshooting) for the one documented gap** |
 | Network Port | 1 | Vermilion | The BACnet/IP port (required) |
 
@@ -74,8 +93,10 @@ Three pieces work together to drive a remote write: Channel 1 ("Garnet") holds
 one local and one remote object-property reference; an incoming WriteGroup
 (service 40, DS-WG-E-B) matches the Channel by its `Channel_Number` /
 `Control_Groups` and fans the write out to every reference; Schedule 1
-("Saffron") drives the same Channel automatically at 09:00/17:00 daily, plus a
-one-off demo exception event a few seconds after start-up. The remote write
+("Saffron") writes the same Channel at 09:00/17:00 daily, and a demo exception
+event for today (from 00:00:05) means it is already writing 100 % when the
+device starts. The Schedule's write is not propagated to the Channel's members
+at this pin (see the note at the top). The remote write
 itself is performed by the stack's own Device_Address_Binding, not application
 code - see [TUTORIAL.md](TUTORIAL.md#how-the-remote-write-actually-happens)
 for the full mechanism, including a documented change from this profile's
@@ -110,6 +131,8 @@ This is a **self-contained** project. It ships:
 - `CMakeLists.txt` - the build, the same on Windows, Linux, and macOS.
 - `docs/PICS.md` - the conformance statement.
 - `docs/objects.json` - the input to the objects-and-properties generator.
+- `tests/` - the Wire Tests (see [Wire Tests](#wire-tests)), and `wiretest/`, the
+  series' shared Python harness they are written against (vendored, like `common/`).
 - `submodules/cas-bacnet-stack/` - the **CAS BACnet Stack as a git submodule**
   (private; requires a license - see above). Its sources are compiled into the
   executable, so there is no library or DLL to build, ship, or install.
@@ -154,6 +177,17 @@ first - the build needs the stack submodule.
 If your CAS BACnet Stack lives somewhere other than the bundled submodule, point
 CMake at it: `cmake -B build -S . -D CAS_STACK_DIR=/path/to/cas-bacnet-stack`.
 
+> **WriteGroup must be compiled into the stack.** The stack's default preset
+> (`STACK_OPTION_TARGET_FULL`) does not compile the WriteGroup service; only
+> `STACK_OPTION_WRITE_GROUP` (or `STACK_OPTION_PROFILE_B_LS`) does. Without it
+> the stack can neither execute nor send a WriteGroup, and this example stops at
+> start-up with `Error: Failed to enable the WriteGroup service.` The default
+> build above compiles the stack from source, and `CMakeLists.txt` defines
+> `STACK_OPTION_WRITE_GROUP` for it. If you link a prebuilt stack library
+> instead (`-D CAS_BACNET_STACK_LINK=STATIC` or `DLL`), build that library with
+> `STACK_OPTION_WRITE_GROUP` defined - for example, on Windows, run the stack's
+> MSBuild with the environment variable `CL=-DSTACK_OPTION_WRITE_GROUP`.
+
 ## Run
 
 ```bash
@@ -167,26 +201,23 @@ CMake at it: `cmake -B build -S . -D CAS_STACK_DIR=/path/to/cas-bacnet-stack`.
 Expected output:
 
 ```
-BACnet B-LS (Lighting Supervisor) Example - C++ v1.0.0
-CAS BACnet Stack version: 6.0.21.0
-Common helper (common/) version: 2.5.0
+BACnet B-LS (Lighting Supervisor) Example - C++ v1.1.0
+CAS BACnet Stack version: 6.0.23.0
+Common helper (common/) version: 3.3.0
 FYI: Listening for BACnet/IP on UDP port 47808 (Network Port 1).
-TX 21 bytes to 192.168.3.255:47808 (broadcast) (Network Port 1)
+TX 21 bytes to 192.168.3.255:47808 (broadcast) (Network Port 1) - Unconfirmed: I-Am
 FYI: Device 389017 ("Chipkin Example B-LS") ready. Vendor ID 389. Press 'h' for help.
 FYI: Lighting Output 1 (Jade) starts at 0.0% (off). WriteProperty its
      Lighting_Command to fade/ramp/step it, or its Present_Value to set a level.
 FYI: Channel 1 (Garnet) fans a WriteGroup out to Jade AND remote device 389016.
      Press 'd' to discover it (Who-Is), then 'w' to fire a demo WriteGroup.
-     Schedule 1 (Saffron) does the same automatically at 09:00/17:00 daily,
-     plus a one-off demo exception a few seconds after start-up - or press
-     's' to jump straight to it.
+     Schedule 1 (Saffron) writes Channel 1 at 09:00/17:00 daily; a demo
+     exception for today (from 00:00:05) has it writing 100% now.
+WriteProperty: Channel 1 (Garnet) <- 100.00 @ priority 12
 ```
 
-> The banner above says to press `'s'` to jump to the Schedule's exception
-> event - that is what the binary actually prints, but at this pin `'s'` is
-> not wired to a `case` in `main()`'s key-handling loop, so pressing it does
-> nothing. The exception event fires on its own a few seconds after start-up
-> regardless. See [TUTORIAL.md](TUTORIAL.md#troubleshooting).
+The last line is Schedule 1 writing Channel 1 as soon as the device starts: its
+demo exception event covers today from 00:00:05, so it is already in effect.
 
 The device listens on UDP **47808** (BACnet/IP). Allow that port through your
 firewall. To use a different port, pass `--port` (see below).
@@ -219,9 +250,12 @@ While the example runs, these keys are available:
 
 The up/down keys change the live `Present_Value` of the analog input, so a
 client re-reading it sees the new value. The Schedule's demo exception event
-(see [Verify](#verify)) fires on its own a few seconds after start-up and does
-not need a key press - see [TUTORIAL.md](TUTORIAL.md#troubleshooting) for a
-documented gap around the `'s'` key some earlier notes in this series describe.
+(see [Verify](#verify)) is in effect from start-up and needs no key press; `'s'`
+does nothing in this example.
+
+> **Windows reads keys from the console only.** The keys work when you type them
+> in the example's own console window; they cannot be fed through a pipe, which
+> is how the Linux checks in this README's notes were driven.
 
 ## Verify
 
@@ -245,20 +279,40 @@ instance on the same subnet on a different port (that is `REMOTE_DEVICE_INSTANCE
    Analog Input 1) is rejected.
 5. **WriteGroup** - press `'d'` then `'w'` in the console (or send the
    equivalent BACnet requests from an external client): Lighting Output 1
-   (Jade) updates locally, and a WriteProperty should reach a second running
-   instance's Lighting Output.
-6. **Schedule** - wait for the demo exception event a few seconds after
-   start-up: the console logs a Schedule-driven WriteProperty to Channel 1.
+   (Jade) updates locally (checked on Linux at this pin: 0 % -> 100 %). A
+   WriteProperty is meant to reach a second running instance's Lighting Output;
+   that has not been seen working yet (see the note at the top).
+6. **Schedule** - at start-up the console logs a Schedule-driven write to
+   Channel 1 (`WriteProperty: Channel 1 (Garnet) <- 100.00 @ priority 12`): the
+   demo exception event covers today from 00:00:05. Jade does not change; see
+   the note at the top.
 7. A service not in the support table (e.g. SubscribeCOV) is **rejected**.
 
 For the full property-by-property review, the conformance statement, and this
 example's documented verification gaps, see [TUTORIAL.md](TUTORIAL.md).
 
+## Wire Tests
+
+Discovery, automated: a Python BACnet client drives the running example over
+BACnet/IP from outside it, the way a client discovers a device - Who-Is, the
+Device's `Object_List`, then for every object its `Property_List` and a
+ReadProperty of every property it lists. Every read must come back as a value; an
+Error, Reject or Abort fails the run. Python 3 standard library only:
+
+```bash
+python3 tests/run_wire_tests.py --exe build/BACnetExampleBLS          # Linux/macOS
+python tests\run_wire_tests.py --exe build\Release\BACnetExampleBLS.exe   # Windows
+```
+
+It ends with `ALL WIRE TESTS PASSED` (exit 0). CI runs it on Linux after the
+smoke test. [tests/README.md](tests/README.md) says what each check proves. It
+does not test the WriteGroup fan-out yet.
+
 
 ## The BACnet profile example series
 
 <!-- PROFILE-TABLE:BEGIN (generated from cas-bacnet-stack-examples/docs/profile-table.md - do not edit here) -->
-The CAS BACnet Stack supports every standardized device profile in ASHRAE 135-2024 Annex L, and there is one example repository per profile. Pick the profile your device claims, then the language you build in. "Ask" means the example hasn't been built yet for that language - [contact Chipkin](https://store.chipkin.com/contact-us) if you need one.
+There is one example repository per standardized device profile in ASHRAE 135-2024 Annex L. An example marked ⛔ is blocked: the stack cannot yet perform that profile's function through its customer interface, and the example's README says what it does today. Pick the profile your device claims, then the language you build in. "Ask" means the example hasn't been built yet for that language - [contact Chipkin](https://store.chipkin.com/contact-us) if you need one.
 
 ### Controllers (Annex L.4)
 
@@ -281,7 +335,7 @@ The CAS BACnet Stack supports every standardized device profile in ASHRAE 135-20
 
 | Profile | C++ | Node.js | C# | Rust | Python | Go |
 |---|---|---|---|---|---|---|
-| **B-ACC** Access Control Controller | [B-ACC-CPP](https://github.com/chipkin/BACnetProfileExample-B-ACC-CPP) | Ask | Ask | Ask | Ask | Ask |
+| **B-ACC** Access Control Controller | [B-ACC-CPP](https://github.com/chipkin/BACnetProfileExample-B-ACC-CPP) ⛔ blocked on [stack #2150](https://github.com/chipkin/cas-bacnet-stack/issues/2150), [#2044](https://github.com/chipkin/cas-bacnet-stack/issues/2044) | Ask | Ask | Ask | Ask | Ask |
 | **B-AACC** Advanced Access Control Controller | [B-AACC-CPP](https://github.com/chipkin/BACnetProfileExample-B-AACC-CPP) | Ask | Ask | Ask | Ask | Ask |
 
 ### Lighting controllers (Annex L.11)
@@ -303,7 +357,7 @@ The CAS BACnet Stack supports every standardized device profile in ASHRAE 135-20
 
 | Profile | C++ | Node.js | C# | Rust | Python | Go |
 |---|---|---|---|---|---|---|
-| **B-AS** Authorization Server | [B-AS-CPP](https://github.com/chipkin/BACnetProfileExample-B-AS-CPP) | Ask | Ask | Ask | Ask | Ask |
+| **B-AS** Authorization Server | [B-AS-CPP](https://github.com/chipkin/BACnetProfileExample-B-AS-CPP) ⛔ blocked on [stack #2043](https://github.com/chipkin/cas-bacnet-stack/issues/2043) | Ask | Ask | Ask | Ask | Ask |
 
 ### Miscellaneous (Annex L.7, combinable with any one family)
 
@@ -311,10 +365,10 @@ The CAS BACnet Stack supports every standardized device profile in ASHRAE 135-20
 |---|---|---|---|---|---|---|
 | **B-BBMD** Broadcast Management Device | [B-BBMD-CPP](https://github.com/chipkin/BACnetProfileExample-B-BBMD-CPP) | Ask | Ask | Ask | Ask | Ask |
 | **B-ACDC** Access Control Door Controller | [B-ACDC-CPP](https://github.com/chipkin/BACnetProfileExample-B-ACDC-CPP) | Ask | Ask | Ask | Ask | Ask |
-| **B-ACCR** Access Control Credential Reader | [B-ACCR-CPP](https://github.com/chipkin/BACnetProfileExample-B-ACCR-CPP) | Ask | Ask | Ask | Ask | Ask |
+| **B-ACCR** Access Control Credential Reader | [B-ACCR-CPP](https://github.com/chipkin/BACnetProfileExample-B-ACCR-CPP) ⛔ blocked on [stack #3934](https://github.com/chipkin/cas-bacnet-stack/issues/3934) | Ask | Ask | Ask | Ask | Ask |
 | **B-RTR** Router | [B-RTR-CPP](https://github.com/chipkin/BACnetProfileExample-B-RTR-CPP) | Ask | Ask | Ask | Ask | Ask |
 | **B-GW** Gateway | [B-GW-CPP](https://github.com/chipkin/BACnetProfileExample-B-GW-CPP) | Ask | Ask | Ask | Ask | Ask |
-| **B-DAP** Device Address Proxy | [B-DAP-CPP](https://github.com/chipkin/BACnetProfileExample-B-DAP-CPP) | Ask | Ask | Ask | Ask | Ask |
+| **B-DAP** Device Address Proxy | [B-DAP-CPP](https://github.com/chipkin/BACnetProfileExample-B-DAP-CPP) ⛔ blocked on [stack #2032](https://github.com/chipkin/cas-bacnet-stack/issues/2032) | Ask | Ask | Ask | Ask | Ask |
 | **B-SCHUB** BACnet/SC Hub | [B-SCHUB-CPP](https://github.com/chipkin/BACnetProfileExample-B-SCHUB-CPP) | Ask | Ask | Ask | Ask | Ask |
 | **B-GENERAL** General device (Annex L.8) | *(satisfied by every example above)* | — | — | — | — | — |
 
@@ -342,18 +396,18 @@ Client-side profiles.
 | **B-EWS** Elevator Workstation | planned | — | — | — | — | — |
 | **B-AEWS** Advanced Elevator Workstation | planned | — | — | — | — | — |
 
-🚧 = in progress. "Ask" = not yet built for that language; contact Chipkin if you need it. Profile definitions: ANSI/ASHRAE 135-2024 Annex L. BIBB definitions: Annex K. Get the stack: <https://store.chipkin.com/services/stacks/bacnet-stack>.
+🚧 = in progress. ⛔ = Blocked Example (blocked on the named stack gap). "Ask" = not yet built for that language; contact Chipkin if you need it. Profile definitions: ANSI/ASHRAE 135-2024 Annex L. BIBB definitions: Annex K. Get the stack: <https://store.chipkin.com/services/stacks/bacnet-stack>.
 <!-- PROFILE-TABLE:END -->
 
 ## Versions
 
 | | |
 |---|---|
-| Example version | 1.0.0 |
-| `common/` helper | 2.5.0 |
-| CAS BACnet Stack | 6.0.21 — pinned at `6.x` @ `abd4cee1`, compiled from source |
-| Protocol_Revision | 24 (the stack default — the highest it supports) |
-| Verified on | Windows (MSVC 2022, C++17) |
+| Example version | 1.1.0 |
+| `common/` helper | 3.3.0 |
+| CAS BACnet Stack | 6.0.23 — pinned at `6.x` @ `64b2cfac5`, compiled from source with `STACK_OPTION_WRITE_GROUP` |
+| Protocol_Revision | 30 (the stack default at the pin) |
+| Verified on | Windows (MSVC, VS 18, STATIC) and Linux (g++, WSL Ubuntu 22.04, SOURCE), 2026-10-15 |
 
 ## References
 

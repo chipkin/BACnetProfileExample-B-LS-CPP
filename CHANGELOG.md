@@ -5,6 +5,67 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - unreleased
+
+### Changed
+
+- **Stack Pin moves to `6.x` @ `64b2cfac5` (6.0.23)** from `6.x` @ `abd4cee1`
+  (6.0.21), per the series rule that a pin moves to the latest `6.x` whenever an
+  example is updated.
+- **The build compiles WriteGroup into the stack.** The stack's default preset
+  (`STACK_OPTION_TARGET_FULL`) leaves WriteGroup out, and since stack #3031
+  `BACnetStack_SetServiceEnabled(SERVICE_WRITE_GROUP)` fails on such a build, so
+  the example stopped at start-up. `CMakeLists.txt` now defines
+  `STACK_OPTION_WRITE_GROUP` for the default SOURCE build; README "Build" says to
+  build a prebuilt STATIC/DLL stack library with it. (At `abd4cee1` the default
+  build accepted the enable call but had no WriteGroup in it, so the `'w'` demo
+  and DS-WG-E-B never worked in that build.)
+- **Protocol_Revision 24 -> 30** (the stack's default at the new pin).
+- **Segmentation is now supported** (`segmented-both`), by the stack (stack
+  #2992). `docs/PICS.md` section 5 updated and the objects block regenerated.
+- **`common/` 3.0.0 -> 3.3.0**, copied verbatim from B-SS-CPP `b640a81`.
+- README, TUTORIAL, AGENTS.md and PICS version lines: stack 6.0.23, `common/`
+  3.3.0, Protocol_Revision 30. README profile table re-synced. APP_VERSION
+  1.0.2 -> 1.1.0.
+
+### Fixed
+
+- **WriteProperty and WriteGroup to Channel 1 failed.** At this pin the stack
+  hands a client WriteProperty and an incoming WriteGroup to `SetPropertyReal` /
+  `SetPropertyNull` on Present_Value with a priority, not on Priority_Array with
+  an index as `BACnetStack_AddChannelObject`'s doc says (the stack's Schedule
+  still uses the documented shape). The example refused the undocumented shape,
+  so both failed (WriteProperty: Error property / write-access-denied). Both
+  shapes are now accepted. Result on Linux: the `'w'` WriteGroup moves Jade from
+  0 % to 100 %. Recorded as a stack defect in TODO.md.
+- **The docs no longer claim what the example does not do:**
+  - the Schedule does **not** drive the Channel's fan-out: it writes Channel 1's
+    Present_Value, which the stack stores but does not propagate to the members
+    (135-2024 cl. 12.53.5 says it should; stack defect, TODO.md). README intro,
+    BIBB table (SCHED-E-B), object table, TUTORIAL, PICS and `docs/objects.json`
+    corrected;
+  - the demo exception event is for today from 00:00:05, so it is in effect
+    from start-up, not "a few seconds after start-up" (README, TUTORIAL,
+    AGENTS.md, PICS, the `main.cpp` comment and the start-up banner);
+  - the banner no longer says to press `'s'`, which does nothing here;
+  - DS-WP-A and DS-ALO-A: `main.cpp` never sends a WriteProperty; the `'w'`/`'d'`
+    keys send a WriteGroup and a Who-Is. The WriteProperty to the remote device
+    is the stack's, from the Channel, and has not been seen on the wire yet;
+  - the remote fan-out is described as unverified, with the reason (the
+    binding Who-Is goes to this host's own address: the `common/` broadcast
+    defect, stack #3933).
+- TODO.md: #2034 and #963 are closed upstream and removed as blockers; the
+  stack defects found at this pin are recorded with their evidence.
+
+### Added
+
+- **Wire Tests** (`tests/`, README "Wire Tests"): `tests/discovery_test.py`, the
+  series' discovery test from B-SS-CPP `da3e96f` with this example's twelve
+  objects as its control. CI runs it on Linux after the smoke test. Result:
+  18/18 on Windows (STATIC) and Linux (SOURCE), 173 reads, all values.
+- `wiretest/` 0.5.0, the series' shared Wiretest Harness, vendored verbatim from
+  B-BBMD-CPP `75aedd8`.
+
 ## [1.0.2] - unreleased
 
 ### Changed

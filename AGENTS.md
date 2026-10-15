@@ -71,7 +71,7 @@ Schedule's demo exception event fires on its own by wall clock regardless. See
 
 This example **requires** a stack with the Channel/Schedule engine and the
 Device_Address_Binding (DAB) resolver, present at the pinned commit
-(`submodules/cas-bacnet-stack` @ `abd4cee1`, `6.x`, 6.0.21). It does **not**
+(`submodules/cas-bacnet-stack` @ `64b2cfac5`, `6.x`, 6.0.23). It does **not**
 register `RegisterCallbackChannelSendWritePropertyToRemote` or
 `RegisterCallbackScheduleSendWritePropertyToRemote` - **verify before assuming
 they exist**: at this pin they were removed (see the "Sprint 82" comment in
@@ -87,7 +87,7 @@ that comment, not an assumption this file is still accurate.
   "Jade"); vendor id 389; device instance **389017**.
 - Implement **only** what B-LS requires - DS-RP-B, DS-WP-A, DS-WP-B, DS-WG-E-B,
   DS-ALO-A, SCHED-E-B, DM-DDB-A/B, DM-DOB-B, DM-DCC-B, DM-TS-B/DM-UTC-B - but
-  expose **every required property** of each object for Protocol_Revision 24.
+  expose **every required property** of each object for Protocol_Revision 30.
 - Do **not** add COV, alarms, trending, or backup/restore - a B-LS does not
   require them.
 - **Every service number is verified against
@@ -117,24 +117,31 @@ that comment, not an assumption this file is still accurate.
 
 ## How to verify a change
 
-There are no unit tests; verification is behavioural:
+The Wire Tests in `tests/` automate the discovery half of this (README "Wire
+Tests"): `python3 tests/run_wire_tests.py --exe build/BACnetExampleBLS`. Run them
+after any change. The stack must be compiled with `STACK_OPTION_WRITE_GROUP`
+(`CMakeLists.txt` does it for the default SOURCE build) or the example exits at
+start-up. Beyond the Wire Tests, verification is behavioural:
 
 1. Build, then run one instance on a clear UDP port. If any `AddObject`,
    `AddChannelObject`, `AddScheduleObject`, or `SetPropertyWritable` call
    failed, the process exits non-zero.
 2. With a BACnet client, **Who-Is** → confirm **I-Am** from device 389017.
 3. **ReadProperty** every required property of every object; confirm
-   `Protocol_Revision` is 24 and `Object_List` lists all twelve objects.
+   `Protocol_Revision` is 30 and `Object_List` lists all twelve objects.
 4. Run a second, separate `BACnetProfileExample-B-LD-CPP` instance on another
    port (that is `REMOTE_DEVICE_INSTANCE` in `main.cpp`). Press `'d'` then
    `'w'` in this example's console (or send the equivalent BACnet requests
    from an external client, since `_kbhit`/`_getch` read the real console, not
    an automated/piped stdin): confirm Lighting Output 1 (Jade) updates
-   locally, and watch for a WriteProperty reaching the second instance.
-5. Confirm the Schedule's demo exception event fires a few seconds after
-   start-up and writes Channel 1 - this one is easy to observe without a
-   second instance or an external client, and does not depend on the `'s'`
-   key (see the Conventions note above).
+   locally, and watch for a WriteProperty reaching the second instance. At
+   `64b2cfac5` the local update works (Linux, piped `'w'`); the remote write
+   has not been seen yet (README note, TODO.md).
+5. Confirm the Schedule writes Channel 1 at start-up (its demo exception covers
+   today from 00:00:05) - this one is easy to observe without a second
+   instance or an external client, and does not depend on the `'s'` key (see
+   the Conventions note above). At this pin the write is not propagated to
+   Jade: a stack defect (TODO.md).
 6. Confirm services that are not enabled (e.g. ReadPropertyMultiple, SubscribeCOV)
    are rejected.
 7. If you changed the objects or their properties, regenerate `docs/PICS.md`

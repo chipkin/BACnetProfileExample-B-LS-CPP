@@ -57,11 +57,15 @@ receive-side path too.
 
 **3. Schedule 1 ("Saffron")** points at Channel 1's own `Present_Value`
 (`BACnetStack_AddScheduleObjectPropertyReference`) and writes it automatically
-at 09:00/17:00 daily (`AddScheduleWeeklyTimeValue`), plus a one-off demo
-exception event a few seconds after start-up. A Schedule-driven write to
-Channel 1 goes through the exact same mechanism as a direct WriteProperty to
-Channel 1 - it does **not**, on its own, re-trigger Channel 1's WriteGroup
-fan-out; only an actual WriteGroup service request does that (see #2). Combine
+at 09:00/17:00 daily (`AddScheduleWeeklyTimeValue`), plus a demo exception
+event for today from 00:00:05, which is already in effect when the device
+starts. A Schedule-driven write to Channel 1 goes through the same mechanism as
+a direct WriteProperty to Channel 1, and at stack `6.x` @ `64b2cfac5` **neither
+is propagated to the Channel's members** - only an actual WriteGroup service
+request fans out (see #2). That is a stack defect, not BACnet's design:
+135-2024 cl. 12.53.5 says "When Present_Value is written, the Channel object
+shall propagate that value to each of the members in the
+List_Of_Object_Property_References". It is recorded in [TODO.md](TODO.md). Combine
 a Schedule with a WriteGroup by having the Schedule target a Channel that a
 WriteGroup ALSO targets, same as this example does with Channel 1 itself, via
 the `'w'` key's demo.
@@ -71,8 +75,8 @@ the `'w'` key's demo.
 > is mentioned in this example's start-up banner), but this example's `main()`
 > does not have a `case` for `KeyCommand::DemoAdvance` in its key-handling
 > `switch` - pressing `'s'` is currently a no-op here. The exception event
-> still fires by itself a few seconds after start-up regardless (it is a
-> wall-clock exception event, not something the key triggers) - that is what
+> is in effect from start-up regardless (it is a wall-clock exception event
+> for today from 00:00:05, not something the key triggers) - that is what
 > step 6 of the README's Verify section and step 5 of
 > [Reviewing your device](#reviewing-your-device) rely on. Do not rely on the
 > key working until `main.cpp` adds the missing `case`.
@@ -182,9 +186,10 @@ rather than against "it looked fine in the explorer":
    equivalent BACnet requests from an external client - Windows `_kbhit`/
    `_getch` read the real console, not a redirected/piped stdin), and confirm
    Lighting Output 1 (Jade) updates locally while a WriteProperty reaches the
-   second instance's Lighting Output.
-5. Confirm the Schedule's demo exception event fires a few seconds after
-   start-up and writes Channel 1's `Priority_Array` (console:
+   second instance's Lighting Output. (At `64b2cfac5`: the local update is
+   confirmed on Linux; the remote WriteProperty has not been seen yet.)
+5. Confirm the Schedule's demo exception event (today from 00:00:05) is writing
+   Channel 1's `Priority_Array` from start-up (console:
    `WriteProperty: Channel 1 (Garnet) <- 100.00 @ priority 12`) - this one is
    easy to observe without a second instance or an external client, and does
    **not** depend on the `'s'` key (see the note above).
@@ -215,8 +220,10 @@ not in `accepted`, comes out as a ⚠ row - that is a defect, not a feature.
 | Symptom | Cause / fix |
 |---------|-------------|
 | On start-up the app prints a wall of red `Error:` lines but the device works | **Expected — this is not your bug.** This is the stack's own debug logging: the device receives its **own** broadcast I-Am and logs a decode cascade, and a one-time UUID notice for the BACnet/SC datalink this IP-only example never configures. On a healthy start-up roughly half the output is these lines. |
-| Pressing `'s'` does nothing | This is a real gap, not a misunderstanding - see the note in [How Channel + WriteGroup + Schedule drive a remote write](#how-channel--writegroup--schedule-drive-a-remote-write). The demo exception event still fires on its own a few seconds after start-up. |
-| Calendar 1 ("Cream")'s `Date_List` always reads empty / `Present_Value` always reads `false` | Documented gap, not a bug: `Date_List` (cl. 12.8) is a `BACnetLIST of BACnetCalendarEntry`, a variable-length list of a CHOICE (Date \| DateRange \| WeekNDay). Verified against `submodules/cas-bacnet-stack/source/CASBACnetStackDLL.h` at this pin: none of the typed `RegisterCallbackGetProperty*` exports accept a list-of-CHOICE shape, so this example cannot serve `Date_List` and leaves it to the stack default. This does **not** block SCHED-E-B: Schedule 1's own exception event uses `BACnetStack_AddScheduleExceptionEventWithCalendarEntry` (the direct date/period form), confirmed functional in the stack's own doc comment - unlike `BACnetStack_AddScheduleExceptionEventWithCalendarReference` (the Calendar-reference form), which the same doc comment says does not yet resolve a Calendar's `Date_List` (stack issue [#963](https://github.com/chipkin/cas-bacnet-stack/issues/963)). Filed upstream: [chipkin/cas-bacnet-stack#2034](https://github.com/chipkin/cas-bacnet-stack/issues/2034). |
+| Pressing `'s'` does nothing | This is a real gap, not a misunderstanding - see the note in [How Channel + WriteGroup + Schedule drive a remote write](#how-channel--writegroup--schedule-drive-a-remote-write). The demo exception event (today from 00:00:05) is in effect from start-up anyway. |
+| The example exits at start-up with `Error: Failed to enable the WriteGroup service.` | The stack was built without `STACK_OPTION_WRITE_GROUP`; its default preset leaves WriteGroup out. Use the default SOURCE build (`CMakeLists.txt` defines it), or rebuild your prebuilt stack library with it (README "Build"). |
+| A WriteProperty to Channel 1, or the Schedule's write, does not change Jade | At stack `6.x` @ `64b2cfac5` only a WriteGroup propagates to the Channel's members; cl. 12.53.5 says any Present_Value write should. Stack defect, see [TODO.md](TODO.md). Use `'w'` (a WriteGroup) to see the fan-out. |
+| Calendar 1 ("Cream")'s `Date_List` always reads empty / `Present_Value` always reads `false` | This example adds Calendar 1 with plain `BACnetStack_AddObject` and puts nothing in its `Date_List`, so it is empty and `Present_Value` is `false`. The stack has since gained a stack-held Calendar (`BACnetStack_AddCalendarObject` and its `AddCalendarDateList*` exports; stack issues [#2034](https://github.com/chipkin/cas-bacnet-stack/issues/2034) and [#963](https://github.com/chipkin/cas-bacnet-stack/issues/963) are closed), which this example does not use yet. Schedule 1's exception event uses the direct date form (`AddScheduleExceptionEventWithCalendarEntry`), so it does not depend on the Calendar. |
 | A WriteGroup / remote write does not seem to reach the second device | The stack's Device_Address_Binding must have resolved the remote device's address first - press `'d'` (or wait for the periodic Who-Is heartbeat) before `'w'`. Confirm the second instance is actually running and reachable on the same subnet/port you expect; see [How the remote write actually happens](#how-the-remote-write-actually-happens). |
 | CMake error: *"CAS BACnet Stack adapter not found under: ..."* | Submodules not initialized. Run `git submodule update --init --recursive` (or pass `-D CAS_STACK_DIR=...`). |
 | `CASBACnetStackDLL.h: No such file or directory` | Same - submodules not checked out. |

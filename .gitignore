@@ -1,2 +1,5 @@
 # CMake build output
 build/
+
+# Python bytecode from tests/ and wiretest/
+__pycache__/

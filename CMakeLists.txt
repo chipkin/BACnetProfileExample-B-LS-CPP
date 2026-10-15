@@ -63,6 +63,22 @@ endif()
 # See submodules/cas-bacnet-stack/adapters/cpp/CMakeLists.txt for what each mode does.
 add_subdirectory("${CAS_STACK_DIR}/adapters/cpp" cas-bacnet-stack-adapter)
 
+# --- WriteGroup must be compiled into the stack ------------------------------
+# The stack's default preset (STACK_OPTION_TARGET_FULL) does NOT compile the
+# WriteGroup service: only STACK_OPTION_WRITE_GROUP (or STACK_OPTION_PROFILE_B_LS,
+# which sets it) does. Without it the stack can neither execute a WriteGroup
+# (DS-WG-E-B, the Channel's job) nor send one (BACnetStack_SendWriteGroup returns
+# false), and BACnetStack_SetServiceEnabled(SERVICE_WRITE_GROUP) fails, so this
+# example stops at start-up. SOURCE mode compiles the stack here, so turn it on.
+# STATIC/DLL mode links a prebuilt stack: build that library with
+# STACK_OPTION_WRITE_GROUP defined (README "Build").
+if(CAS_BACNET_STACK_LINK STREQUAL "SOURCE")
+    target_compile_definitions(cas_bacnet_stack_adapter PRIVATE STACK_OPTION_WRITE_GROUP)
+else()
+    message(STATUS "B-LS: CAS_BACNET_STACK_LINK=${CAS_BACNET_STACK_LINK} - the prebuilt stack library "
+                   "must be built with STACK_OPTION_WRITE_GROUP, or the example exits at start-up")
+endif()
+
 # --- The shared example helper ----------------------------------------------
 set(COMMON_SOURCES
     "${EXAMPLES_COMMON_DIR}/CASExampleHelper.cpp"
