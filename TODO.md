@@ -4,10 +4,14 @@ Per the series rule: a required property, BIBB or Profile Function step the publ
 cannot do is named here, not faked. Re-verify every entry whenever the Stack Pin moves.
 Checked at stack `6.x` @ `64b2cfac5` (6.0.23), 2026-10-15.
 
-## Stack defects found at 64b2cfac5 (not filed yet)
+## Stack defects found at 64b2cfac5 (filed)
 
-These were found while moving the pin. They are recorded here with the evidence; the
-series coordinator verifies and files stack issues.
+These were found while moving the pin and filed after verification:
+1 is [#3954](https://github.com/chipkin/cas-bacnet-stack/issues/3954), 2 is [#3955](https://github.com/chipkin/cas-bacnet-stack/issues/3955), 3 is [#3956](https://github.com/chipkin/cas-bacnet-stack/issues/3956).
+
+Verification also showed that this example's Schedule writes the Channel's
+`Priority_Array`, a property a Channel does not have. It should write `Present_Value`.
+That is this example's own phase-2 work.
 
 ### 1. The default preset does not compile WriteGroup
 
