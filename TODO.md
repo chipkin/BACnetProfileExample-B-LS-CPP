@@ -30,7 +30,8 @@ whenever the Stack Pin moves.
 
 ## 2. Error Code BUSY goes out with Error Class PROPERTY, not OBJECT
 
-- **Where:** the CAS BACnet Stack (stack defect, not filed).
+- **Where:** the CAS BACnet Stack - already tracked as [#3088](https://github.com/chipkin/cas-bacnet-stack/issues/3088) item CR2-F01-031 (this
+  example's evidence added as a comment).
   `source/BACnetBusinessLogic.cpp` `GetErrorClassForCallbackErrorCode()`: a Set
   callback can only name an error code, and the stack picks the class; `busy` (82)
   falls to `default: return BACnetErrorClass::property`.
