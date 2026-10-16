@@ -38,6 +38,10 @@ and its Failure Modes, with Wire Tests (the series' Profile-functional bar,
 
 ### Changed
 
+- `tests/discovery_test.py` sends its Who-Is once more, with a visible `[RETRY]` line, when no
+  I-Am comes back in 3 s (`tools/patch-discovery-whois-retry.py` from the example series).
+  Who-Is is unconfirmed, so nothing else retries it, and the example's UDP receive can drop a
+  datagram on Windows (`common/` SimpleUDP).
 - **`common/` 3.3.0 -> 3.4.0**, copied verbatim from B-SS-CPP branch
   `common-3.4.0-broadcast-to-self`: a broadcast the stack addresses to this
   socket's own address goes to the subnet broadcast. The stack's

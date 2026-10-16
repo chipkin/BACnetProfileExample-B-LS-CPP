@@ -114,12 +114,22 @@ def is_value(answer):
     return answer.answered and answer.frame.pdu_type == wiretest.PDU_COMPLEX_ACK
 
 
-def who_is(client, port):
+def who_is(client, port, attempts=2):
     """Who-Is for this one device, unicast to it (a client that already knows the address
-    does this; Explorer broadcasts). Returns the I-Am frame that comes back, or None."""
-    client.frames.clear()
-    client.send(wiretest.bvlc(wiretest.npdu(wiretest.who_is(DEVICE_INSTANCE, DEVICE_INSTANCE))), port)
-    return client.wait_for(lambda frame: wiretest.i_am_device_instance(frame.payload) == DEVICE_INSTANCE, 3.0)
+    does this; Explorer broadcasts). Returns the I-Am frame that comes back, or None.
+    Who-Is is unconfirmed, so nothing else retries it: if no I-Am comes back it is sent
+    once more, with a visible [RETRY] line (the example's UDP receive can drop a datagram
+    on Windows - common/ SimpleUDP)."""
+    for attempt in range(attempts):
+        if attempt:
+            print("[RETRY] Who-Is got no I-Am in 3.0 s - sent again", flush=True)
+        client.frames.clear()
+        client.send(wiretest.bvlc(wiretest.npdu(wiretest.who_is(DEVICE_INSTANCE, DEVICE_INSTANCE))), port)
+        frame = client.wait_for(lambda candidate: wiretest.i_am_device_instance(candidate.payload) == DEVICE_INSTANCE,
+                                3.0)
+        if frame is not None:
+            return frame
+    return None
 
 
 def main():
