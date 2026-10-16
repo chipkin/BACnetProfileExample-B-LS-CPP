@@ -115,5 +115,5 @@ whenever the Stack Pin moves.
   `BACnetGroupChannelValue ::= SEQUENCE { channel [0] Unsigned16, value [1]
   BACnetChannelValue, overriding-priority [2] ... OPTIONAL }`, while cl. 15.11.1.1.3's
   prose names "(channel number, overridingPriority, value)" tuples and the stack (and
-  `tests/wiretest_extras.py`) encode channel [0], overriding-priority [1], then the
+  `wiretest/codec.py` `write_group_request`) encode channel [0], overriding-priority [1], then the
   untagged value. Needs a look at the printed standard.

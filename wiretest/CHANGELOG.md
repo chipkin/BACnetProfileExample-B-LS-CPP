@@ -3,6 +3,33 @@
 The shared Wiretest Harness of the BACnet profile example series. Vendored into each
 example; `WIRETEST_VERSION` in `__init__.py` names the version.
 
+## [0.6.0] - 2026-10-15
+
+Folds in the generic helpers the phase-2 reworks of B-LS, B-BC and B-AAC wrote while
+0.5.0 was frozen, deduplicated, on top of B-BBMD's 0.5.0. Additive: every 0.5.0 call
+keeps its meaning.
+
+### Added
+
+- `codec`: `simple_ack` (B-LS and B-AAC each had one), `write_group_request`,
+  `parse_write_property_request` and `context_values` (B-LS); `status_flags` and
+  `read_property_multiple_ack` (B-BC); `application_bit_string`, `application_date`,
+  `application_time`, `context_character_string` and `context_enumerated` (B-AAC);
+  constants `SERVICE_WRITE_GROUP`, `SERVICE_READ_PROPERTY_MULTIPLE`, `ERROR_CODE_BUSY`,
+  `PROPERTY_DEVICE_ADDRESS_BINDING`, `PROPERTY_EVENT_STATE`,
+  `PROPERTY_LIST_OF_OBJECT_PROPERTY_REFERENCES` and `RELIABILITY_UNRELIABLE_OTHER`.
+- `peer.SimulatedServer`: one Peer class in place of B-LS's `CommandablePeer` and B-BC's
+  `HumidityPeer`. Objects whose values are octets or callables; ReadProperty,
+  ReadPropertyMultiple and WriteProperty; `writable`, `check_write()` and `on_write()`
+  hooks; `mode` online / offline / refusing; `read_requests`, `write_requests`,
+  `requests_while_offline`, `reads()`, `writes_matching()`; `announce()`.
+- `alarm` (from B-AAC's `alarm_codec.py`): AcknowledgeAlarm, GetEventInformation and its
+  ACK parser, DeviceCommunicationControl, TimeSynchronization, BACnetDestination,
+  BACnetTimeStamp, `EventNotification`, `date_time_text`.
+- `workstation.Workstation` (from B-AAC): a client that also receives event
+  notifications, answering confirmed ones from a background thread unless told not to.
+- `wait.wait_until` (from B-BC).
+
 ## [0.5.0] - 2026-10-15
 
 Added for B-BBMD's wire tests (foreign devices and peer BBMDs talking Annex J to the

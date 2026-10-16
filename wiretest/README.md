@@ -12,6 +12,10 @@ fail when the example's Profile Function is removed. See the series glossary
 | `client` | `Client` - ReadProperty / WriteProperty with invoke ids, optionally through a router (`dnet=`, `dadr=`), with an opt-in visible retry (`retries=`); `Answer` (`ok`, `value`, `error`) |
 | `process` | `start(exe, arguments, label, environment=None)` - run an example until its `ready` line; `Program.press(keys)` (menu keys, POSIX); `Program.stop()`; `broadcast_address(console, port)` |
 | `peer` | `SimulatedDevice` - a Python BACnet/IP device (ReadProperty of its Device object, Who-Is/I-Am) that answers back through a router; `broadcast=(ip, port)` also makes it hear its network's broadcasts (Linux/macOS) |
+| `peer` (0.6.0) | `SimulatedServer` - a Peer whose objects answer ReadProperty, ReadPropertyMultiple and WriteProperty, with `mode` online / offline / refusing, write hooks and request bookkeeping |
+| `alarm` | AcknowledgeAlarm, GetEventInformation, DeviceCommunicationControl, TimeSynchronization; `EventNotification` decoding |
+| `workstation` | `Workstation` - a client that is also an event-notification recipient |
+| `wait` | `wait_until(check, seconds)` |
 | `results` | `record` (a counted check), `known_gap` (a reported defect outside the example), `summary` (exit code) |
 
 ```python

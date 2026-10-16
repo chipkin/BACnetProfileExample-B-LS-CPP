@@ -41,11 +41,9 @@ from pathlib import Path
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY))
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import wiretest  # noqa: E402  (the vendored harness at the repository root)
 from wiretest import codec, known_gap, record, summary  # noqa: E402
-import wiretest_extras as extras  # noqa: E402
 
 # Match main.cpp.
 DEVICE_INSTANCE = 389017
@@ -73,7 +71,7 @@ REMOTE_TIMEOUT_SECONDS = 10 + 5
 # long enough for one of this test's own ReadProperty requests to need its retry (2 x 3 s).
 SETTLE_SECONDS = 8
 
-FANOUT_DEFECT = "stack defect, not filed here: a WriteProperty or Schedule write to a Channel is not propagated (cl. 12.53.5)"
+FANOUT_DEFECT = "stack #3956: a WriteProperty or Schedule write to a Channel is not propagated (cl. 12.53.5)"
 
 
 def main():
@@ -95,9 +93,9 @@ def main():
         broadcast = (broadcast_ip, args.port)
         time.sleep(0.5)
 
-    peer = extras.CommandablePeer(REMOTE_DEVICE_INSTANCE, "Simulated Light 389016",
-                                  {REMOTE_LIGHT: {codec.PROPERTY_PRESENT_VALUE: codec.application_real(0.0)}},
-                                  broadcast=broadcast)
+    peer = wiretest.SimulatedServer(REMOTE_DEVICE_INSTANCE, "Simulated Light 389016",
+                                   {REMOTE_LIGHT: {codec.PROPERTY_PRESENT_VALUE: codec.application_real(0.0)}},
+                                   broadcast=broadcast)
     example = wiretest.start(args.exe, ["--port", args.port], "bls")
     client = wiretest.Client(retries=1)
     try:
@@ -146,7 +144,7 @@ def send_write_group(client, args, example, value, priority=8):
     once more, with a visible [RETRY] line - the same value at the same priority, so a
     duplicate changes nothing. The console is used only to decide that; every check reads
     the result over the wire."""
-    apdu = extras.write_group_request(CONTROL_GROUP, priority, [(CHANNEL_NUMBER, codec.application_real(value), None)])
+    apdu = codec.write_group_request(CONTROL_GROUP, priority, [(CHANNEL_NUMBER, codec.application_real(value), None)])
     shown = f"WriteGroup: Channel 1 (Garnet) <- {value:.2f} @ priority {priority}"
     before = example.output().count(shown)
     for attempt in range(2):
@@ -183,7 +181,7 @@ def run(args, example, peer, client, hears_broadcasts):
     else:
         peer.announce(args.port)
     bound = wait_for(lambda: "I-Am: remote device 389016" in example.output(), 5)
-    binding = read(client, args, (codec.OBJECT_TYPE_DEVICE, DEVICE_INSTANCE), extras.PROPERTY_DEVICE_ADDRESS_BINDING)
+    binding = read(client, args, (codec.OBJECT_TYPE_DEVICE, DEVICE_INSTANCE), codec.PROPERTY_DEVICE_ADDRESS_BINDING)
     listed = binding.ok and (codec.OBJECT_TYPE_DEVICE, REMOTE_DEVICE_INSTANCE) in codec.decoded_values(binding.value_octets)
     record("Device_Address_Binding lists device 389016 (the Peer's I-Am bound it)", bound and listed,
            binding.describe() if not listed else "")
@@ -191,8 +189,8 @@ def run(args, example, peer, client, hears_broadcasts):
     # --- 2. Start-up state ---------------------------------------------------------
     record("Channel 1 Write_Status is IDLE at start-up (cl. 12.53.7)", write_status(client, args) == WRITE_STATUS_IDLE,
            WRITE_STATUS_NAMES.get(write_status(client, args), "unreadable"))
-    references = read(client, args, SCHEDULE, extras.PROPERTY_LIST_OF_OBJECT_PROPERTY_REFERENCES)
-    reference_fields = dict(extras.context_values(references.value_octets or b""))
+    references = read(client, args, SCHEDULE, codec.PROPERTY_LIST_OF_OBJECT_PROPERTY_REFERENCES)
+    reference_fields = dict(codec.context_values(references.value_octets or b""))
     referenced = (reference_fields.get(0) == codec.object_id(*CHANNEL) and
                   int.from_bytes(reference_fields.get(1, b""), "big") == codec.PROPERTY_PRESENT_VALUE and
                   2 not in reference_fields)
@@ -237,10 +235,10 @@ def run(args, example, peer, client, hears_broadcasts):
     busy = client.write_property(args.port, CHANNEL[0], CHANNEL[1], codec.PROPERTY_PRESENT_VALUE,
                                  codec.application_real(42.0), priority=9)
     record("A WriteProperty of Channel 1 Present_Value meanwhile is refused with Error Code BUSY (cl. 12.53.5)",
-           busy.error is not None and busy.error[1] == extras.ERROR_CODE_BUSY, busy.describe())
+           busy.error is not None and busy.error[1] == codec.ERROR_CODE_BUSY, busy.describe())
     known_gap("... and with Error Class OBJECT (cl. 12.53.5; BUSY is an OBJECT code, cl. 18.2)",
               busy.error is not None and busy.error[0] == codec.ERROR_CLASS_OBJECT,
-              "stack defect, not filed here: a Set callback names only the error code, and "
+              "stack #3088 (CR2-F01-031): a Set callback names only the error code, and "
               "GetErrorClassForCallbackErrorCode sends BUSY as class PROPERTY; " + busy.describe())
     seen, status = wait_write_status(client, args, WRITE_STATUS_FAILED, REMOTE_TIMEOUT_SECONDS)
     record("Write_Status is FAILED when the offline member's write times out (cl. 12.53.7)", seen, status)

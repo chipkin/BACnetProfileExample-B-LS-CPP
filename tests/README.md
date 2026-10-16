@@ -11,13 +11,11 @@ Python-simulated Peers - never another example's binary. Two scripts:
   finds a device and reads everything it says it has.
 
 The tests are written against the series' shared harness in
-[`../wiretest/`](../wiretest/README.md) (0.5.0, vendored like `common/`). What the
-harness does not have yet is in [`wiretest_extras.py`](wiretest_extras.py), kept
-generic and separate so it can move into `wiretest/` 0.6.0: a WriteGroup-Request
-encoder, a WriteProperty request parser, a SimpleACK builder, a context-tag reader and
-`CommandablePeer` (a `SimulatedDevice` whose objects take WriteProperty, and which a
-test can take offline or make refuse writes). Python 3 standard library only - nothing
-to `pip install`.
+[`../wiretest/`](../wiretest/README.md) (0.6.0, vendored like `common/`): the
+WriteGroup-Request encoder, the WriteProperty request parser and the Peer
+(`wiretest.SimulatedServer`, a Python device whose objects take WriteProperty and
+which a test can take offline or make refuse writes) all come from there. Python 3
+standard library only - nothing to `pip install`.
 
 ## Running
 

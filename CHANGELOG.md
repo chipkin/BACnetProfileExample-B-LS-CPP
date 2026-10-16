@@ -14,6 +14,7 @@ and its Failure Modes, with Wire Tests (the series' Profile-functional bar,
 
 ### Added
 
+- Wire Tests use the shared `wiretest/` 0.6.0; `tests/wiretest_extras.py` is folded into it (`wiretest.SimulatedServer`, `codec.write_group_request`, ...). Known-gap lines cite the filed stack issues #3956 and #3088.
 - **`Write_Status` follows the fan-out** (cl. 12.53.5, 12.53.7; `main.cpp`
   section 2e). It is IDLE at start-up, IN_PROGRESS while the stack writes the
   members, then SUCCESSFUL, or FAILED when a member refuses (Error, Reject,

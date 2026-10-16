@@ -27,6 +27,7 @@ Peer's own socket. `received_on_broadcast` tells a test which socket a frame arr
 import select
 import socket
 import threading
+import time
 
 from . import codec
 
@@ -140,3 +141,138 @@ class SimulatedDevice:
         else:
             npdu_octets = codec.npdu(apdu)
         self.sock.sendto(codec.bvlc(npdu_octets), request.source)
+
+
+class SimulatedServer(SimulatedDevice):
+    """A SimulatedDevice with objects a test controls: it answers ReadProperty,
+    ReadPropertyMultiple and WriteProperty of them, and can go offline or refuse writes.
+
+    `objects`: {(object_type, instance): {property_identifier: value}}, each value either
+    application-tagged octets or a callable returning them (so a test can change what is
+    served by changing an attribute). On top of SimulatedDevice (Who-Is / I-Am,
+    ReadProperty of its Device object) it:
+      - answers ReadProperty of a listed object's property with its value, and an unlisted
+        property of a listed object with Error PROPERTY / UNKNOWN_PROPERTY;
+      - answers ReadPropertyMultiple (cl. 15.7) the same way, property by property;
+      - answers WriteProperty of a writable property with a SimpleACK and stores the value.
+        `writable`: None (default) makes every listed property writable, else a set of
+        (object_type, instance, property_identifier). An unlisted object gets Error OBJECT /
+        UNKNOWN_OBJECT, anything else not writable Error PROPERTY / WRITE_ACCESS_DENIED.
+        Override check_write(request) to refuse more (return (error class, error code)) and
+        on_write(request) to act on an accepted write.
+    Bookkeeping: `read_requests` holds (service, [(object_type, instance, [property ids])])
+    for every read of a listed object; `write_requests` every WriteProperty that arrived,
+    answered or not, as codec.parse_write_property_request() returns it.
+    `mode` decides how it answers, and a test may change it at any time:
+      "online"   - as above;
+      "offline"  - nothing at all, not even Who-Is: the device is gone (writes are still kept
+                   in `write_requests`, and `requests_while_offline` counts the confirmed
+                   requests that went unanswered);
+      "refusing" - every WriteProperty gets Error PROPERTY / WRITE_ACCESS_DENIED.
+    announce(port, ip) sends an I-Am, unicast, the way a device that has just started does:
+    how an example on the same host learns this Peer's address (two processes on one host
+    never hear each other's broadcasts).
+    Came from B-LS's CommandablePeer and B-BC's HumidityPeer (wiretest 0.6.0)."""
+
+    def __init__(self, device_instance, object_name, objects, writable=None, **keywords):
+        self.objects = {key: dict(properties) for key, properties in objects.items()}
+        self.writable = None if writable is None else set(writable)
+        self.mode = "online"
+        self.read_requests = []
+        self.write_requests = []
+        self.requests_while_offline = 0
+        super().__init__(device_instance, object_name, **keywords)
+
+    def announce(self, port, ip="127.0.0.1", times=1, interval=0.2):
+        frame = codec.bvlc(codec.npdu(codec.i_am(self.device_instance, self.vendor_identifier)))
+        for attempt in range(times):
+            if attempt:
+                time.sleep(interval)
+            self.sock.sendto(frame, (ip, port))
+
+    def value(self, object_type, instance, property_identifier):
+        """The application-tagged octets this Peer serves, or None if it has no such property."""
+        served = self.objects.get((object_type, instance), {}).get(property_identifier)
+        return served() if callable(served) else served
+
+    def reads(self, service):
+        with self._lock:
+            return [specifications for kind, specifications in self.read_requests if kind == service]
+
+    def writes_matching(self, object_type, instance, property_identifier):
+        with self._lock:
+            return [write for write in self.write_requests if (write["object_type"], write["instance"],
+                                                               write["property_identifier"]) ==
+                    (object_type, instance, property_identifier)]
+
+    def check_write(self, request):
+        """Override to refuse a write the defaults would accept: return (error class, error code)."""
+        return None
+
+    def on_write(self, request):
+        """Called after a write is accepted and stored. Override to act on it."""
+
+    # -- answering ----------------------------------------------------------
+
+    def _answer(self, frame):
+        confirmed = frame.pdu_type == codec.PDU_CONFIRMED_REQUEST
+        request = None
+        if confirmed and frame.service == codec.SERVICE_WRITE_PROPERTY:
+            request = codec.parse_write_property_request(frame.payload)
+            if request is not None:
+                with self._lock:
+                    self.write_requests.append(request)
+        if self.mode == "offline":
+            if confirmed and frame.service in (codec.SERVICE_READ_PROPERTY, codec.SERVICE_READ_PROPERTY_MULTIPLE,
+                                               codec.SERVICE_WRITE_PROPERTY):
+                with self._lock:
+                    self.requests_while_offline += 1
+            return None
+        if confirmed and frame.service == codec.SERVICE_WRITE_PROPERTY:
+            return self._write(frame, request)
+        if confirmed and frame.service == codec.SERVICE_READ_PROPERTY_MULTIPLE:
+            return self._read_multiple(frame)
+        if confirmed and frame.service == codec.SERVICE_READ_PROPERTY:
+            parsed = codec.parse_read_property_request(frame.payload)
+            if parsed is not None and (parsed[0], parsed[1]) in self.objects:
+                object_type, instance, property_identifier = parsed
+                with self._lock:
+                    self.read_requests.append((codec.SERVICE_READ_PROPERTY,
+                                               [(object_type, instance, [property_identifier])]))
+                served = self.value(object_type, instance, property_identifier)
+                if served is None:
+                    return codec.error_pdu(frame.invoke_id, codec.SERVICE_READ_PROPERTY,
+                                           codec.ERROR_CLASS_PROPERTY, codec.ERROR_CODE_UNKNOWN_PROPERTY)
+                return codec.read_property_ack(frame.invoke_id, object_type, instance, property_identifier, served)
+        return super()._answer(frame)
+
+    def _read_multiple(self, frame):
+        specifications = codec.read_access_specifications(frame.payload[4:])
+        with self._lock:
+            self.read_requests.append((codec.SERVICE_READ_PROPERTY_MULTIPLE,
+                                       [(object_type, instance, list(properties))
+                                        for (object_type, instance), properties in specifications.items()]))
+        return codec.read_property_multiple_ack(frame.invoke_id, [
+            (object_type, instance, [(property_identifier, self.value(object_type, instance, property_identifier))
+                                     for property_identifier in properties])
+            for (object_type, instance), properties in specifications.items()])
+
+    def _write(self, frame, request):
+        if request is None:
+            return None
+        key = (request["object_type"], request["instance"])
+        if key not in self.objects:
+            return codec.error_pdu(frame.invoke_id, codec.SERVICE_WRITE_PROPERTY,
+                                   codec.ERROR_CLASS_OBJECT, codec.ERROR_CODE_UNKNOWN_OBJECT)
+        property_identifier = request["property_identifier"]
+        allowed = (property_identifier in self.objects[key] if self.writable is None
+                   else key + (property_identifier,) in self.writable)
+        if self.mode == "refusing" or not allowed:
+            refusal = (codec.ERROR_CLASS_PROPERTY, codec.ERROR_CODE_WRITE_ACCESS_DENIED)
+        else:
+            refusal = self.check_write(request)
+        if refusal is not None:
+            return codec.error_pdu(frame.invoke_id, codec.SERVICE_WRITE_PROPERTY, refusal[0], refusal[1])
+        self.objects[key][property_identifier] = request["value_octets"]
+        self.on_write(request)
+        return codec.simple_ack(frame.invoke_id, codec.SERVICE_WRITE_PROPERTY)

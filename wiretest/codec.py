@@ -62,6 +62,7 @@ SERVICE_ADD_LIST_ELEMENT = 8
 SERVICE_REMOVE_LIST_ELEMENT = 9
 SERVICE_READ_PROPERTY = 12
 SERVICE_WRITE_PROPERTY = 15
+SERVICE_READ_PROPERTY_MULTIPLE = 14
 SERVICE_REINITIALIZE_DEVICE = 20
 
 # ReinitializeDevice 'Reinitialized State of Device' (cl. 16.4.1.1.1).
@@ -72,6 +73,7 @@ REINITIALIZE_ACTIVATE_CHANGES = 7
 # Unconfirmed service choices (cl. 21).
 SERVICE_I_AM = 0
 SERVICE_WHO_IS = 8
+SERVICE_WRITE_GROUP = 10             # BACnetUnconfirmedServiceChoice write-group (cl. 21)
 
 OBJECT_TYPE_ANALOG_INPUT = 0
 OBJECT_TYPE_ANALOG_OUTPUT = 1
@@ -83,7 +85,10 @@ OBJECT_TYPE_MULTI_STATE_INPUT = 13
 OBJECT_TYPE_NETWORK_PORT = 56
 
 PROPERTY_DESCRIPTION = 28
+PROPERTY_DEVICE_ADDRESS_BINDING = 30
+PROPERTY_EVENT_STATE = 36
 PROPERTY_LIST_OF_GROUP_MEMBERS = 53
+PROPERTY_LIST_OF_OBJECT_PROPERTY_REFERENCES = 54
 PROPERTY_OBJECT_IDENTIFIER = 75
 PROPERTY_OBJECT_LIST = 76
 PROPERTY_OBJECT_NAME = 77
@@ -106,11 +111,13 @@ ERROR_CODE_UNKNOWN_PROPERTY = 32
 ERROR_CODE_VALUE_OUT_OF_RANGE = 37
 ERROR_CODE_WRITE_ACCESS_DENIED = 40
 ERROR_CODE_LIST_ELEMENT_NOT_FOUND = 81
+ERROR_CODE_BUSY = 82
 
 MAX_INSTANCE = 0x3FFFFF
 
 # BACnetReliability (cl. 21) - the two values a gateway reports most.
 RELIABILITY_NO_FAULT_DETECTED = 0
+RELIABILITY_UNRELIABLE_OTHER = 7
 RELIABILITY_COMMUNICATION_FAILURE = 12
 
 # BACnetStatusFlags bit positions (cl. 21): bit 0 is the first bit of the BIT STRING.
@@ -357,6 +364,86 @@ def list_element_request(invoke_id, service, object_type, instance, property_ide
                              context_object_id(0, object_type, instance) +
                              context_unsigned(1, property_identifier) +
                              opening(3) + b"".join(elements) + closing(3))
+
+
+def simple_ack(invoke_id, service):
+    """A SimpleACK APDU (cl. 20.1.4) for confirmed service `service`."""
+    return bytes([PDU_SIMPLE_ACK << 4, invoke_id, service])
+
+
+def application_bit_string(bits):
+    """BIT STRING (cl. 20.2.10), bit 0 first."""
+    octets = bytearray((len(bits) + 7) // 8)
+    for index, bit in enumerate(bits):
+        if bit:
+            octets[index // 8] |= 0x80 >> (index % 8)
+    body = bytes([len(octets) * 8 - len(bits)]) + bytes(octets)
+    return bytes([0x80 | len(body)]) + body
+
+
+def status_flags(bits):
+    """An application-tagged BACnetStatusFlags: [in-alarm, fault, overridden, out-of-service]
+    (cl. 21; STATUS_FLAG_* name the positions)."""
+    return application_bit_string(list(bits))
+
+
+def application_date(year, month, day, weekday):
+    """Date (cl. 20.2.12): year - 1900, month, day, weekday 1 = Monday .. 7 = Sunday."""
+    return bytes([0xA4, year - 1900, month, day, weekday])
+
+
+def application_time(hour, minute, second, hundredths=0):
+    return bytes([0xB4, hour, minute, second, hundredths])
+
+
+def context_character_string(tag, text):
+    body = b"\x00" + text.encode("utf-8")
+    if len(body) < 5:
+        return bytes([(tag << 4) | 0x08 | len(body)]) + body
+    return bytes([(tag << 4) | 0x08 | 5, len(body)]) + body
+
+
+def context_enumerated(tag, value):
+    return context_unsigned(tag, value)   # same octets: a context tag carries no type
+
+
+def read_property_multiple_ack(invoke_id, results):
+    """A ReadPropertyMultiple-ACK (cl. 15.7). `results`: [(object_type, instance,
+    [(property_identifier, value_octets or None)])]; None answers that property with
+    [5] Error PROPERTY / UNKNOWN_PROPERTY, as a device without it does."""
+    body = b""
+    for object_type, instance, properties in results:
+        body += context_object_id(0, object_type, instance) + opening(1)
+        for property_identifier, value_octets in properties:
+            body += context_unsigned(2, property_identifier)
+            if value_octets is None:
+                body += (opening(5) + application_enumerated(ERROR_CLASS_PROPERTY) +
+                         application_enumerated(ERROR_CODE_UNKNOWN_PROPERTY) + closing(5))
+            else:
+                body += opening(4) + value_octets + closing(4)
+        body += closing(1)
+    return bytes([PDU_COMPLEX_ACK << 4, invoke_id, SERVICE_READ_PROPERTY_MULTIPLE]) + body
+
+
+def write_group_request(group_number, write_priority, change_list, inhibit_delay=None):
+    """An Unconfirmed WriteGroup-Request APDU (cl. 15.11).
+
+    `change_list`: [(channel, value_octets, overriding_priority or None)], value_octets an
+    application-tagged BACnetChannelValue such as application_real(60.0). Each entry is
+    encoded channel [0], overriding-priority [1] (when given), then the untagged value,
+    the (channel number, overridingPriority, value) order cl. 15.11.1.1.3 names and the
+    CAS BACnet Stack decodes."""
+    change_octets = b""
+    for channel, value_octets, overriding_priority in change_list:
+        change_octets += context_unsigned(0, channel)
+        if overriding_priority is not None:
+            change_octets += context_unsigned(1, overriding_priority)
+        change_octets += value_octets
+    parameters = (context_unsigned(0, group_number) + context_unsigned(1, write_priority) +
+                  opening(2) + change_octets + closing(2))
+    if inhibit_delay is not None:
+        parameters += bytes([0x39, 1 if inhibit_delay else 0])   # [3] BOOLEAN, one octet
+    return bytes([PDU_UNCONFIRMED_REQUEST << 4, SERVICE_WRITE_GROUP]) + parameters
 
 
 # ---------------------------------------------------------------------------
@@ -660,3 +747,52 @@ def error_class_and_code(apdu):
     if len(values) < 2:
         return None
     return int.from_bytes(values[0][1], "big"), int.from_bytes(values[1][1], "big")
+
+
+def parse_write_property_request(apdu):
+    """A WriteProperty request APDU (cl. 15.9) as a dict - object_type, instance,
+    property_identifier, array_index, value_octets (application-tagged), priority - or None."""
+    try:
+        if apdu[0] >> 4 != PDU_CONFIRMED_REQUEST or apdu[3] != SERVICE_WRITE_PROPERTY:
+            return None
+        request = {"array_index": None, "priority": None}
+        position = 4
+        _, _, _, body, position = read_tag(apdu, position)          # [0] object identifier
+        raw = struct.unpack(">I", body)[0]
+        request["object_type"], request["instance"] = raw >> 22, raw & MAX_INSTANCE
+        _, _, _, body, position = read_tag(apdu, position)          # [1] property identifier
+        request["property_identifier"] = int.from_bytes(body, "big")
+        number, _, kind, body, after = read_tag(apdu, position)
+        if number == 2 and kind == "value":                         # [2] array index
+            request["array_index"] = int.from_bytes(body, "big")
+            position = after
+        number, _, kind, _, position = read_tag(apdu, position)     # [3] opening
+        start = position
+        tag_start = position
+        depth = 1
+        while depth:
+            tag_start = position
+            number, is_context, kind, _, position = read_tag(apdu, position)
+            if kind == "open":
+                depth += 1
+            elif kind == "close":
+                depth -= 1
+        request["value_octets"] = apdu[start:tag_start]
+        if position < len(apdu):
+            _, _, _, body, position = read_tag(apdu, position)      # [4] priority
+            request["priority"] = int.from_bytes(body, "big")
+        return request
+    except (IndexError, struct.error):
+        return None
+
+
+def context_values(octets):
+    """Every context-tagged primitive in `octets` as (tag number, value bytes), in order -
+    e.g. a BACnetDeviceObjectPropertyReference's object [0], property [1], device [3]."""
+    values = []
+    position = 0
+    while octets and position < len(octets):
+        number, is_context, kind, body, position = read_tag(octets, position)
+        if is_context and kind == "value":
+            values.append((number, body))
+    return values
