@@ -18,7 +18,7 @@ sys.path.insert(0, str(REPOSITORY))
 
 import wiretest  # noqa: E402  (the vendored harness at the repository root)
 
-SCRIPTS = ["discovery_test.py"]
+SCRIPTS = ["discovery_test.py", "channel_fanout_test.py"]
 
 
 def main():
@@ -39,7 +39,7 @@ def main():
 
     print("\n===== summary =====")
     for script, returncode, totals in outcomes:
-        print(f"{'PASS' if returncode == 0 else 'FAIL'}  {script:24} {totals}")
+        print(f"{'PASS' if returncode == 0 else 'FAIL'}  {script:26} {totals}")
     failed = [script for script, returncode, _ in outcomes if returncode != 0]
     print("ALL WIRE TESTS PASSED" if not failed else f"FAILED: {', '.join(failed)}")
     return 1 if failed else 0

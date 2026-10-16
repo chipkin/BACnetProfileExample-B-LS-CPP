@@ -9,6 +9,7 @@ right.
 - [Extending the example](#extending-the-example)
 - [How Channel + WriteGroup + Schedule drive a remote write](#how-channel--writegroup--schedule-drive-a-remote-write)
 - [How the remote write actually happens](#how-the-remote-write-actually-happens)
+- [Write_Status: following the fan-out to its end](#write_status-following-the-fan-out-to-its-end)
 - [What each object type needs you to serve](#what-each-object-type-needs-you-to-serve)
 - [Who serves what: the application or the stack?](#who-serves-what-the-application-or-the-stack)
 - [Reviewing your device](#reviewing-your-device)
@@ -56,7 +57,9 @@ that this device's own Channel 1 matches, so pressing `'w'` exercises the full
 receive-side path too.
 
 **3. Schedule 1 ("Saffron")** points at Channel 1's own `Present_Value`
-(`BACnetStack_AddScheduleObjectPropertyReference`) and writes it automatically
+(`BACnetStack_AddScheduleObjectPropertyReference(..., PROPERTY_IDENTIFIER_PRESENT_VALUE,
+false, 0)`, written at Priority_For_Writing 12; before v1.2.0 it named the
+Channel's `Priority_Array`, a property a Channel does not have) and writes it automatically
 at 09:00/17:00 daily (`AddScheduleWeeklyTimeValue`), plus a demo exception
 event for today from 00:00:05, which is already in effect when the device
 starts. A Schedule-driven write to Channel 1 goes through the same mechanism as
@@ -94,8 +97,19 @@ remote write itself, automatically, via an internal resolver called the
 **Device_Address_Binding (DAB)**. Once a reference names
 `refUseDeviceIdentifier = true` and a remote `refDeviceInstance`, the DAB
 resolves that device's address from whatever I-Am traffic it has seen - either
-its own periodic Who-Is heartbeat, or a manual one (the `'d'` key,
-`BACnetStack_SendWhoIs`) - and the stack sends the WriteProperty on its own.
+its own Who-Is (sent at start-up for a device it has not found, then hourly), or a
+manual one (the `'d'` key, `BACnetStack_SendWhoIs`) - and the stack sends the
+WriteProperty on its own. An unbound device is skipped: a WriteGroup does not keep
+the write for later.
+
+> **The DAB's Who-Is needs `common/` 3.4.0 or later.** The stack sends it with
+> `broadcast = true` and, as the address, a template copied from the last I-Am it
+> heard - at start-up that is this device's own I-Am, looped back. `common/` up to
+> 3.3.0 sent such a frame unicast to this host, so no other device ever heard it
+> and the remote member was never found (stack
+> [#3933](https://github.com/chipkin/cas-bacnet-stack/issues/3933)). 3.4.0 sends a
+> broadcast addressed to its own socket to the subnet broadcast. If you write your
+> own send callback, do the same.
 This example registers **neither** removed callback (they do not exist any
 more; registering them would not compile) - see `main.cpp`'s header comment
 for the full writeup and the citation.
@@ -106,6 +120,36 @@ not add `RegisterCallbackChannelSendWritePropertyToRemote` or
 at this pin and the build will fail. Re-verify this section against
 `CASBACnetStackDLL.h`'s "Sprint 82" comment whenever the stack pin moves
 forward past a release that might reintroduce or further change this shape.
+
+## Write_Status: following the fan-out to its end
+
+`Write_Status` is required on a Channel, and the stack does not keep it. cl.
+12.53.5: "During the writing of values to members, Write_Status shall be
+IN_PROGRESS. At the end of writing all values, Write_Status shall change to
+SUCCESSFUL or FAILED based on the results of these writes." The application can
+see every one of those writes, so `main.cpp` section 2e keeps it:
+
+- **The start.** The stack calls `WriteGroupInhibitDelay` for Channel 1 just
+  before it writes the Channel for a WriteGroup, then calls `SetPropertyReal` /
+  `SetPropertyNull` for the Channel, then for each local member, all inside one
+  `BACnetStack_Tick()`. The callback sets a flag; the Channel's Set callback, seeing
+  it, sets `Write_Status` = IN_PROGRESS.
+- **The local member.** Jade's Set callback accepts the value or refuses it (a level
+  outside 0..100 %). A refusal marks the fan-out failed.
+- **The remote member.** The stack sends a confirmed WriteProperty. Its answer comes
+  back through `HookSimpleAck`, `HookError`, `HookReject`, `HookAbort`, or - when
+  device 389016 never answers - `HookTimeout`, after APDU_Timeout x
+  (Number_Of_APDU_Retries + 1) (10 s x 1 with the stack's defaults). The hooks
+  match the answer by the address `HookIAm` recorded for 389016. If 389016 has never
+  sent an I-Am, the stack skips it, and the fan-out is failed at once.
+- **The end.** Once no answer is outstanding, `Write_Status` is SUCCESSFUL, or
+  FAILED if any write failed.
+- **BUSY.** A WriteProperty of Channel 1 `Present_Value` while IN_PROGRESS is refused
+  with Error Code BUSY (cl. 12.53.5). The stack sends it with class PROPERTY rather
+  than OBJECT (stack defect, [TODO.md](TODO.md)).
+
+A WriteProperty or Schedule write to Channel 1 leaves `Write_Status` alone: at this
+pin the stack does not forward it, so nothing is in progress.
 
 ## What each object type needs you to serve
 
@@ -155,15 +199,15 @@ Every object, not just the Device, is in [docs/PICS.md](docs/PICS.md).
 
 ### The Channel's write dispatch is not the usual shape
 
-Every other commandable object in this file (Analog/Binary/Multi-State/Lighting
-Output) is written via `PROPERTY_IDENTIFIER_PRESENT_VALUE` plus the callback's
-`priority` argument. A Channel's `Present_Value` write arrives on
-`PROPERTY_IDENTIFIER_PRIORITY_ARRAY` with `useArrayIndex=true` and the array
-index AS the priority - see `BACnetStack_AddChannelObject`'s doc comment and
-the Channel-specific branches in `SetPropertyReal`/`SetPropertyNull`/
-`GetPropertyReal` in `main.cpp`. Copying the standard commandable pattern onto
-a new Channel silently never fires - the value never gets written, and nothing
-tells you why.
+`BACnetStack_AddChannelObject`'s doc comment says a Channel's `Present_Value`
+write arrives on `PROPERTY_IDENTIFIER_PRIORITY_ARRAY` with `useArrayIndex=true`
+and the array index AS the priority. At stack `6.x` @ `64b2cfac5` every write this
+example sees - a client WriteProperty, a WriteGroup, and Schedule 1's write -
+arrives the usual way instead, on `PROPERTY_IDENTIFIER_PRESENT_VALUE` with the
+`priority` argument (stack
+[#3955](https://github.com/chipkin/cas-bacnet-stack/issues/3955)). The
+Channel-specific branches in `SetPropertyReal` / `SetPropertyNull` accept both, so
+a new Channel copied from them works whichever the stack sends.
 
 `Channel_Number` and `Control_Groups` must be served (`GetPropertyUnsignedInteger`)
 and writable, or an incoming WriteGroup never matches this Channel at all - see
@@ -181,16 +225,16 @@ rather than against "it looked fine in the explorer":
    compare the value against the PICS.
 3. Confirm the services you do **not** implement are still rejected - for B-LS,
    ReadPropertyMultiple and SubscribeCOV.
-4. Run a second, separate `BACnetProfileExample-B-LD-CPP` instance on another
-   port, press `'d'` then `'w'` in this example's console (or send the
-   equivalent BACnet requests from an external client - Windows `_kbhit`/
-   `_getch` read the real console, not a redirected/piped stdin), and confirm
-   Lighting Output 1 (Jade) updates locally while a WriteProperty reaches the
-   second instance's Lighting Output. (At `64b2cfac5`: the local update is
-   confirmed on Linux; the remote WriteProperty has not been seen yet.)
+4. Run the Wire Tests (`python3 tests/run_wire_tests.py`): they play device
+   389016 and a WriteGroup client, and check the fan-out, `Write_Status` and the
+   Failure Modes. By hand: run a device 389016 with a Lighting Output 1 on another
+   host of this subnet, same UDP port, then send a WriteGroup (or press `'w'` in
+   this example's console - Windows `_kbhit`/`_getch` read the real console, not a
+   piped stdin), and confirm Jade and the other device's Lighting Output both take
+   the value and Channel 1's `Write_Status` reads `successful`.
 5. Confirm the Schedule's demo exception event (today from 00:00:05) is writing
-   Channel 1's `Priority_Array` from start-up (console:
-   `WriteProperty: Channel 1 (Garnet) <- 100.00 @ priority 12`) - this one is
+   Channel 1's `Present_Value` from start-up (console:
+   `Write: Channel 1 (Garnet) <- 100.00 @ priority 12`) - this one is
    easy to observe without a second instance or an external client, and does
    **not** depend on the `'s'` key (see the note above).
 
@@ -224,7 +268,7 @@ not in `accepted`, comes out as a ⚠ row - that is a defect, not a feature.
 | The example exits at start-up with `Error: Failed to enable the WriteGroup service.` | The stack was built without `STACK_OPTION_WRITE_GROUP`; its default preset leaves WriteGroup out. Use the default SOURCE build (`CMakeLists.txt` defines it), or rebuild your prebuilt stack library with it (README "Build"). |
 | A WriteProperty to Channel 1, or the Schedule's write, does not change Jade | At stack `6.x` @ `64b2cfac5` only a WriteGroup propagates to the Channel's members; cl. 12.53.5 says any Present_Value write should. Stack defect, see [TODO.md](TODO.md). Use `'w'` (a WriteGroup) to see the fan-out. |
 | Calendar 1 ("Cream")'s `Date_List` always reads empty / `Present_Value` always reads `false` | This example adds Calendar 1 with plain `BACnetStack_AddObject` and puts nothing in its `Date_List`, so it is empty and `Present_Value` is `false`. The stack has since gained a stack-held Calendar (`BACnetStack_AddCalendarObject` and its `AddCalendarDateList*` exports; stack issues [#2034](https://github.com/chipkin/cas-bacnet-stack/issues/2034) and [#963](https://github.com/chipkin/cas-bacnet-stack/issues/963) are closed), which this example does not use yet. Schedule 1's exception event uses the direct date form (`AddScheduleExceptionEventWithCalendarEntry`), so it does not depend on the Calendar. |
-| A WriteGroup / remote write does not seem to reach the second device | The stack's Device_Address_Binding must have resolved the remote device's address first - press `'d'` (or wait for the periodic Who-Is heartbeat) before `'w'`. Confirm the second instance is actually running and reachable on the same subnet/port you expect; see [How the remote write actually happens](#how-the-remote-write-actually-happens). |
+| A WriteGroup / remote write does not seem to reach the second device | The stack's Device_Address_Binding must have resolved the remote device's address first: the console prints `I-Am: remote device 389016 is at ...` when it has. The stack's own Who-Is goes out at start-up (then hourly); `'d'` sends another. The second device must be on the same subnet AND the same UDP port - a device on another port never hears a broadcast. `Write_Status` reads `failed` after a WriteGroup that could not reach it. See [How the remote write actually happens](#how-the-remote-write-actually-happens). |
 | CMake error: *"CAS BACnet Stack adapter not found under: ..."* | Submodules not initialized. Run `git submodule update --init --recursive` (or pass `-D CAS_STACK_DIR=...`). |
 | `CASBACnetStackDLL.h: No such file or directory` | Same - submodules not checked out. |
 | Windows: *"No CMAKE_CXX_COMPILER could be found"* | Install Visual Studio with the "Desktop development with C++" workload, then re-run from a fresh terminal. |

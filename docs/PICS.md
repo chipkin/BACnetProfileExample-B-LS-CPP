@@ -18,7 +18,7 @@ see [README.md](../README.md).
 | **Vendor Identifier** | 389 |
 | **Product Name** | CAS BACnet Stack Example - B-LS |
 | **Product Model Number** | CAS BACnet Stack Example - B-LS |
-| **Application Software Version** | 1.1.0 |
+| **Application Software Version** | 1.2.0 |
 | **Firmware Revision** | 6.0.23.0 (the CAS BACnet Stack version) |
 | **BACnet Protocol Version** | 1 |
 | **BACnet Protocol Revision** | 30 |
@@ -27,12 +27,13 @@ see [README.md](../README.md).
 BACnet Stack. It presents the B-SA-style read-only sensors and commandable
 outputs, a Lighting Output ("Jade"), a Channel ("Garnet") that fans a
 WriteGroup out to Jade and to a remote device's Lighting Output
-(F-CHANNEL / F-EXTWRITE), and a Schedule ("Saffron") that writes the Channel
-on a timer (F-SCHED-E), plus a Calendar ("Cream"). At stack `6.x` @
+(F-CHANNEL / F-EXTWRITE) and reports in `Write_Status` whether every member
+took the value, and a Schedule ("Saffron") that writes the Channel on a timer
+(F-SCHED-E), plus a Calendar ("Cream"). The WriteGroup fan-out to both members,
+and its Failure Modes, are proved by the Wire Tests. At stack `6.x` @
 `64b2cfac5` only a WriteGroup fans out to the Channel's members; the
 Schedule's write and a WriteProperty to the Channel are stored but not
-propagated (a stack defect, see TODO.md), and the remote write has not been
-seen on the wire yet. It is a tutorial for
+propagated (a stack defect, see TODO.md). It is a tutorial for
 implementers of the B-LS profile and the series' canonical implementation of
 F-CHANNEL, F-EXTWRITE and F-SCHED-E.
 
@@ -135,13 +136,14 @@ BACnet/SC, MS/TP, Ethernet (Annex H) and PTP are not supported.
 ## 8. Device address binding
 
 Static device binding is **not required** to be pre-configured, but this
-device does perform dynamic device binding: Channel 1 (Garnet) and Schedule 1
-(Saffron) both carry a reference to a remote device
-(`REMOTE_DEVICE_INSTANCE` = 389016 by default), named with
-`refUseDeviceIdentifier = true`. The stack's Device_Address_Binding (DAB)
-resolves that device's address from I-Am traffic it has observed - its own
-periodic Who-Is heartbeat, or the `'d'` (DiscoverRemote) demo key's manual
-`BACnetStack_SendWhoIs` - and then sends the remote WriteProperty itself. See
+device does perform dynamic device binding: Channel 1 (Garnet) carries a
+reference to a remote device (`REMOTE_DEVICE_INSTANCE` = 389016 by default),
+named with `refUseDeviceIdentifier = true`. The stack's Device_Address_Binding
+(DAB) resolves that device's address from I-Am traffic - its own Who-Is for the
+device (broadcast at start-up, then hourly; it reaches the subnet since
+`common/` 3.4.0), or the `'d'` (DiscoverRemote) demo key's manual
+`BACnetStack_SendWhoIs` - lists it in the Device object's
+`Device_Address_Binding`, and then sends the remote WriteProperty itself. See
 [TUTORIAL.md](../TUTORIAL.md#how-the-remote-write-actually-happens) for the
 full mechanism and why this example does **not** register
 `RegisterCallbackChannelSendWritePropertyToRemote` or
@@ -307,7 +309,7 @@ Every object this example creates, and every REQUIRED property of each (per ANSI
 | Relinquish_Default | Real | app | no |
 | Lighting_Command_Default_Priority | Unsigned | app | no |
 
-### Channel 1 "Garnet" - F-CHANNEL / F-EXTWRITE (canonical). BACnetChannelValue REAL, commandable via a 16-slot Priority_Array the application holds. The stack's Schedule writes it on PROPERTY_IDENTIFIER_PRIORITY_ARRAY with an array index (as BACnetStack_AddChannelObject's doc says); at 64b2cfac5 a client WriteProperty and a WriteGroup arrive on PRESENT_VALUE with a priority instead, so SetPropertyReal/SetPropertyNull accept both (see their comments and TODO.md). List_Of_Object_Property_References and Execution_Delay are stack-held, set with BACnetStack_AddObjectPropertyReferenceToChannel: one local reference to Lighting Output 1 (Jade), one remote reference to device 389016 (a B-LD instance)'s Lighting Output 1. A matching WriteGroup (service 40, DS-WG-E-B) fans a write out to both (the local one is confirmed at 64b2cfac5; the remote one, resolved and sent by the stack's own Device_Address_Binding, has not been seen on the wire yet). A WriteProperty or Schedule write to Present_Value is not propagated at this pin, contrary to cl. 12.53.5 (stack defect, TODO.md).
+### Channel 1 "Garnet" - F-CHANNEL / F-EXTWRITE (canonical). BACnetChannelValue REAL, commandable via a 16-slot Priority_Array the application holds. At 64b2cfac5 every write to it (client WriteProperty, WriteGroup, the Schedule) reaches SetPropertyReal/SetPropertyNull on PRESENT_VALUE with a priority, not on PRIORITY_ARRAY with an index as BACnetStack_AddChannelObject's doc says, so both shapes are accepted (stack #3955, TODO.md). List_Of_Object_Property_References and Execution_Delay are stack-held, set with BACnetStack_AddObjectPropertyReferenceToChannel: one local reference to Lighting Output 1 (Jade), one remote reference to device 389016's Lighting Output 1. A matching WriteGroup (DS-WG-E-B) fans the value out to both: Jade through the Set callbacks, device 389016 with a WriteProperty the stack sends through its Device_Address_Binding (both proved by tests/channel_fanout_test.py). Write_Status is kept by the application from those writes' results (main.cpp section 2e): IDLE at start-up, IN_PROGRESS while a member's answer is outstanding, then SUCCESSFUL or FAILED (cl. 12.53.7); a WriteProperty of Present_Value while IN_PROGRESS is refused with BUSY (sent as class PROPERTY by the stack, TODO.md). Last_Priority starts at 16 (cl. 12.53.6). A WriteProperty or Schedule write to Present_Value is not propagated at this pin, contrary to cl. 12.53.5 (stack #3956, TODO.md).
 
 | Property | Datatype | Served by | Writable |
 |---|---|---|:---:|
@@ -324,7 +326,7 @@ Every object this example creates, and every REQUIRED property of each (per ANSI
 | Control_Groups | BACnetARRAY[N] of Unsigned32 | app | yes |
 | Property_List | BACnetARRAY[N] of BACnetPropertyIdentifier | stack | no |
 
-### Schedule 1 "Saffron" - F-SCHED-E (canonical). Present_Value, Effective_Period and Priority_For_Writing are genuinely served - by the STACK's own Schedule engine, configured through the dedicated API (BACnetStack_AddScheduleObject, AddScheduleWeeklyTimeValue [09:00 on / 17:00 off daily], SetScheduleDefault, SetScheduleEffectivePeriod, SetSchedulePriorityForWriting [12]) rather than a GetProperty callback, which is what this generator's simple app/stack heuristic looks for; they are listed as accepted only because the generator has no third category for 'served by a dedicated stack API, not a callback'. AddScheduleObjectPropertyReference points the Schedule at Channel 1's own Priority_Array, so a Schedule-driven write goes through the same commandable mechanism as a manual WriteProperty to Channel 1; one demo AddScheduleExceptionEventWithCalendarEntry covers today from 00:00:05, so it is in effect from start-up. At 64b2cfac5 the Schedule's write is stored on Channel 1 but not propagated to its members (stack defect, TODO.md). Reliability has no fault condition this example detects, so it is accepted at the generic default (normal), the same pattern as Network Port's Reliability below.
+### Schedule 1 "Saffron" - F-SCHED-E (canonical). Present_Value, Effective_Period and Priority_For_Writing are genuinely served - by the STACK's own Schedule engine, configured through the dedicated API (BACnetStack_AddScheduleObject, AddScheduleWeeklyTimeValue [09:00 on / 17:00 off daily], SetScheduleDefault, SetScheduleEffectivePeriod, SetSchedulePriorityForWriting [12]) rather than a GetProperty callback, which is what this generator's simple app/stack heuristic looks for; they are listed as accepted only because the generator has no third category for 'served by a dedicated stack API, not a callback'. AddScheduleObjectPropertyReference points the Schedule at Channel 1's Present_Value, written at Priority_For_Writing 12 (until v1.2.0 it named the Channel's Priority_Array, which a Channel does not have); one demo AddScheduleExceptionEventWithCalendarEntry covers today from 00:00:05, so it is in effect from start-up. At 64b2cfac5 the Schedule's write is stored on Channel 1 but not propagated to its members (stack defect, TODO.md). Reliability has no fault condition this example detects, so it is accepted at the generic default (normal), the same pattern as Network Port's Reliability below.
 
 | Property | Datatype | Served by | Writable |
 |---|---|---|:---:|

@@ -129,14 +129,14 @@ start-up. Beyond the Wire Tests, verification is behavioural:
 2. With a BACnet client, **Who-Is** → confirm **I-Am** from device 389017.
 3. **ReadProperty** every required property of every object; confirm
    `Protocol_Revision` is 30 and `Object_List` lists all twelve objects.
-4. Run a second, separate `BACnetProfileExample-B-LD-CPP` instance on another
-   port (that is `REMOTE_DEVICE_INSTANCE` in `main.cpp`). Press `'d'` then
-   `'w'` in this example's console (or send the equivalent BACnet requests
-   from an external client, since `_kbhit`/`_getch` read the real console, not
-   an automated/piped stdin): confirm Lighting Output 1 (Jade) updates
-   locally, and watch for a WriteProperty reaching the second instance. At
-   `64b2cfac5` the local update works (Linux, piped `'w'`); the remote write
-   has not been seen yet (README note, TODO.md).
+4. Run the Wire Tests, `python3 tests/run_wire_tests.py --exe <the build>`, on
+   Linux and Windows. `tests/channel_fanout_test.py` plays device 389016
+   (`REMOTE_DEVICE_INSTANCE` in `main.cpp`) as a Python Peer and sends the
+   WriteGroups: it checks that one WriteGroup reaches Jade and the Peer, that
+   Channel 1's `Write_Status` ends SUCCESSFUL, and the Failure Modes (Peer
+   offline, Peer refusing, Jade refusing). Every check was shown to fail
+   without the feature it checks (`tests/README.md`); keep it that way when
+   you add one.
 5. Confirm the Schedule writes Channel 1 at start-up (its demo exception covers
    today from 00:00:05) - this one is easy to observe without a second
    instance or an external client, and does not depend on the `'s'` key (see

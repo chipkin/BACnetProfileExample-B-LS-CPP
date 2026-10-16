@@ -5,6 +5,59 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - unreleased
+
+The example now performs the B-LS Profile Function - Channel 1 forwards a
+WriteGroup to its own Lighting Output and to another device's - and proves it,
+and its Failure Modes, with Wire Tests (the series' Profile-functional bar,
+`docs/GLOSSARY.md` in the example series).
+
+### Added
+
+- **`Write_Status` follows the fan-out** (cl. 12.53.5, 12.53.7; `main.cpp`
+  section 2e). It is IDLE at start-up, IN_PROGRESS while the stack writes the
+  members, then SUCCESSFUL, or FAILED when a member refuses (Error, Reject,
+  Abort), never answers (the stack's Timeout hook, after APDU_Timeout), or cannot
+  be addressed (no I-Am yet). The application learns the remote result through
+  `BACnetStack_RegisterHookSimpleAck` / `Error` / `Reject` / `Abort` / `Timeout`,
+  matched by the address `BACnetStack_RegisterHookIAm` recorded for device 389016.
+  The console prints each step.
+- **BUSY.** A WriteProperty of Channel 1 `Present_Value` while `Write_Status` is
+  IN_PROGRESS is refused with Error Code BUSY (cl. 12.53.5). The stack sends it as
+  class PROPERTY, not OBJECT (stack defect, TODO.md).
+- **Wire Tests** `tests/channel_fanout_test.py`: a Python Peer plays device 389016.
+  The stack's Who-Is reaches it (Linux), it is bound, and one WriteGroup reaches
+  both Jade and the Peer, with `Write_Status` SUCCESSFUL. Failure Modes: the Peer
+  offline (IN_PROGRESS, BUSY, then FAILED after the timeout, then recovery), the
+  Peer refusing the write, Jade refusing 150 %. The stack defects are
+  `[KNOWN GAP]` lines. Each check verified to fail with its feature removed
+  (`tests/README.md`). Generic helpers for the harness in
+  `tests/wiretest_extras.py` (WriteGroup encoding, WriteProperty parsing,
+  `CommandablePeer`), kept separate for `wiretest/` 0.6.0.
+
+### Changed
+
+- **`common/` 3.3.0 -> 3.4.0**, copied verbatim from B-SS-CPP branch
+  `common-3.4.0-broadcast-to-self`: a broadcast the stack addresses to this
+  socket's own address goes to the subnet broadcast. The stack's
+  Device_Address_Binding Who-Is for device 389016 used to go to this host only
+  (stack #3933), so the remote member was never found.
+- APP_VERSION 1.1.0 -> 1.2.0. README rewritten around the scenario (with the
+  Profile Function quoted from Annex L.11.1 and what is Simulation), TUTORIAL
+  gains "Write_Status: following the fan-out to its end", PICS and TODO.md
+  updated.
+
+### Fixed
+
+- **Schedule 1 wrote Channel 1's `Priority_Array`**, a property a Channel does not
+  have (Table 12-62). It references `Present_Value` now, written at
+  Priority_For_Writing 12.
+- **`Write_Status` read as a constant `1`** - IN_PROGRESS, though the comment
+  called it "successful" (BACnetWriteStatus: idle 0, in-progress 1, successful 2,
+  failed 3).
+- **`Last_Priority` started at 0**, not a priority; cl. 12.53.6 says 16.
+- The header comment cited "Annex L.12" for B-LS; it is L.11.1.
+
 ## [1.1.0] - unreleased
 
 ### Changed

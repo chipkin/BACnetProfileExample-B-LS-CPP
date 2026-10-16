@@ -15,13 +15,18 @@
 //
 //     F-CHANNEL   - Channel object + AddObjectPropertyReferenceToChannel
 //     F-EXTWRITE  - a remote (cross-device) object-property reference
-//     F-SCHED-E   - a Schedule that executes a write, including remotely
+//     F-SCHED-E   - a Schedule that executes a write (here, to Channel 1)
 //
-// A B-LS (ANSI/ASHRAE 135, Annex L.12) supervises other lights. It must support:
+// ANSI/ASHRAE 135-2024 Annex L.11.1: "A B-LS is any device that implements
+// Channel objects and optionally Lighting Output and/or Binary Lighting Output
+// objects with the ability to forward channel writes to other BACnet devices."
+// That forwarding - one WriteGroup reaching Jade AND device 389016, with
+// Write_Status saying whether every write worked - is what tests/ proves.
+// A B-LS must support:
 //
 //     DS-RP-B     - respond to ReadProperty requests,
-//     DS-WP-A     - initiate WriteProperty requests (the A-side: this device
-//                   itself writes to another device - see 'w'/'d' keys below),
+//     DS-WP-A     - initiate WriteProperty requests (the A-side: the stack's
+//                   WriteProperty to device 389016 when Channel 1 fans out),
 //     DS-WP-B     - allow other devices to WriteProperty its objects,
 //     DS-WG-E-B   - EXECUTE an incoming WriteGroup request (NEW - the defining
 //                   BIBB): a client names a Group/Channel and this device fans
@@ -75,8 +80,8 @@
 //                                             commandable - the F-CHANNEL addition;
 //                                             fans WriteGroup out to Jade AND a
 //                                             remote object - the F-EXTWRITE addition)
-//     Schedule 1                "Saffron"     (drives a write on a timer - the
-//                                             F-SCHED-E addition; also writes remotely)
+//     Schedule 1                "Saffron"     (writes Channel 1 on a timer - the
+//                                             F-SCHED-E addition)
 //     Calendar 1                "Cream"       (a real, independently-readable Calendar
 //                                             object - see the Date_List note in
 //                                             TODO.md for the one documented gap)
@@ -197,22 +202,23 @@ static const uint32_t LIGHTING_IN_PROGRESS_RAMP_ACTIVE = 2;
 // 1. Example + device configuration
 // -----------------------------------------------------------------------------
 static const char* APP_NAME = "BACnet B-LS (Lighting Supervisor) Example - C++";
-static const char* APP_VERSION = "1.1.0";
+static const char* APP_VERSION = "1.2.0";
 
 // The device instance. BACnet requires this to be configurable, so it defaults
 // to 389017 and can be overridden on the command line with --deviceID. Keep it
 // configurable in your product: it must be unique across the internetwork.
 static uint32_t g_deviceInstance = 389017;
 
-// The remote device this example writes to, for the F-EXTWRITE demo: Channel 1
-// (Garnet) and Schedule 1 (Saffron) both carry a reference to an object on this
-// device. Point it at a second, separately-running example on this subnet - a
-// BACnetProfileExample-B-LD-CPP instance is the natural target (it already has a
-// Lighting Output). Run it on a different UDP port, e.g.:
-//     BACnetExampleBLD.exe --port 47822
-// and this example's DAB (Device_Address_Binding - see the header comment above)
-// resolves its address once it sees an I-Am, either from this device's own
-// periodic broadcasts or from the 'd' (DiscoverRemote) key's manual Who-Is.
+// The remote device this example writes to, for F-EXTWRITE: Channel 1 (Garnet)
+// carries a reference to an object on this device. In the Wire Tests it is a
+// Python Peer (tests/channel_fanout_test.py). On a real network it is any device
+// 389016 with a Lighting Output 1 - a BACnetProfileExample-B-LD-CPP instance is
+// the natural target (389016 is its default instance) - on the SAME subnet and
+// UDP port: a BACnet/IP network is the devices sharing one UDP port, so a device
+// on another port never hears this one's Who-Is. This example's DAB
+// (Device_Address_Binding - see the header comment above) resolves its address
+// once it sees an I-Am: the answer to the DAB's own Who-Is at start-up, or to
+// the 'd' (DiscoverRemote) key's manual one.
 static const uint32_t REMOTE_DEVICE_INSTANCE = 389016; // B-LD's device instance
 static const uint16_t REMOTE_OBJECT_TYPE = 54;          // OBJECT_TYPE_LIGHTING_OUTPUT
 static const uint32_t REMOTE_OBJECT_INSTANCE = 1;        // B-LD's Lighting Output 1 (Jade)
@@ -250,8 +256,8 @@ static const char* DEVICE_NAME = "Chipkin Example B-LS";
 static const char* DEVICE_DESCRIPTION =
     "Chipkin CAS BACnet Stack Example - B-LS (Lighting Supervisor) profile. Supervises "
     "a scene of lights through a Channel object that fans an incoming WriteGroup out to "
-    "a local Lighting Output and a remote device's object, plus a Schedule that drives "
-    "the same fan-out automatically, on a timer, including to the remote device.";
+    "a local Lighting Output and a remote device's object, plus a Schedule that writes "
+    "the Channel on a timer.";
 
 // Device identity strings (read by clients, and used to populate I-Am).
 //   VENDOR_NAME - your company name; it must match VENDOR_IDENTIFIER above.
@@ -371,8 +377,25 @@ static uint32_t g_channelControlGroups[1] = { 1 };
 static const uint32_t CHANNEL_CONTROL_GROUPS_COUNT = 1;
 
 // Last_Priority: the priority the most recent successful write to Channel 1
-// landed at. Updated in SetPropertyReal / SetPropertyNull below.
-static uint32_t g_channelLastPriority = 0; // 0 = "no write yet" (not a valid 1..16 priority)
+// landed at. Updated in SetPropertyReal / SetPropertyNull below. cl. 12.53.6:
+// "The initial value of Last_Priority shall be 16."
+static uint32_t g_channelLastPriority = 16;
+
+// Write_Status (cl. 12.53.7), BACnetWriteStatus. The stack does not keep it: it
+// performs the Channel's writes to its members and tells this application how
+// each one went (the Set callbacks for the local member, the SimpleACK / Error /
+// Reject / Abort / Timeout hooks for the remote one), so the application keeps
+// it - see section 2e.
+static const uint32_t WRITE_STATUS_IDLE = 0;
+static const uint32_t WRITE_STATUS_IN_PROGRESS = 1;
+static const uint32_t WRITE_STATUS_SUCCESSFUL = 2;
+static const uint32_t WRITE_STATUS_FAILED = 3;
+static uint32_t g_channelWriteStatus = WRITE_STATUS_IDLE; // "shall be set to IDLE initially"
+
+// cl. 12.53.5: a WriteProperty of Present_Value while Write_Status is IN_PROGRESS
+// "shall cause a Result(-) ... 'Error Class' of OBJECT and an 'Error Code' of BUSY".
+// Verified against source/BACnetErrorCode.h at the pin: busy (82).
+static const uint32_t ERROR_CODE_BUSY = 82;
 
 // --- Schedule 1 "Saffron" and Calendar 1 "Cream" (F-SCHED-E) ------------------
 static const uint32_t SCHEDULE_INSTANCE = 1;  // "Saffron"
@@ -443,12 +466,11 @@ static Commandable* GetCommandable(uint16_t objectType, uint32_t objectInstance)
         return &g_lightingOutput;
     }
     // F-CHANNEL: Channel 1's Present_Value is ALSO a REAL resolved from a
-    // Priority_Array - see BACnetStack_AddChannelObject's doc. The GET side reads
-    // through this exact same GetCommandable()+ReadPrioritySlot() mechanism as
-    // every other commandable object; the SET side does NOT (see SetPropertyReal
-    // below) - the stack dispatches a Channel write differently, on
-    // PROPERTY_IDENTIFIER_PRIORITY_ARRAY with an array index, not on
-    // PROPERTY_IDENTIFIER_PRESENT_VALUE with a priority argument.
+    // Priority_Array the application holds - see BACnetStack_AddChannelObject's
+    // doc. The GET side reads through this exact same
+    // GetCommandable()+ReadPrioritySlot() mechanism as every other commandable
+    // object; the SET side has its own arm in SetPropertyReal / SetPropertyNull
+    // below (two dispatch shapes, Write_Status, BUSY).
     if (objectType == OBJECT_TYPE_CHANNEL && objectInstance == CHANNEL_INSTANCE) {
         return &g_channel;
     }
@@ -693,12 +715,12 @@ bool GetPropertyEnumerated(const uint32_t deviceInstance, const uint16_t objectT
     }
 
     // --- Channel 1's REQUIRED Write_Status (F-CHANNEL) ------------------------
-    // BACnetWriteStatus: 0 = in-progress, 1 = successful, 2 = failed. This example
-    // completes every write synchronously (no real hardware in the loop), so a
-    // Channel's write is always already "successful" by the time anyone reads it.
+    // BACnetWriteStatus: 0 = idle, 1 = in-progress, 2 = successful, 3 = failed
+    // (source/BACnetWriteStatus.h). Kept by section 2e from what happened to the
+    // Channel's last writes to its members, local and remote.
     if (objectType == OBJECT_TYPE_CHANNEL && objectInstance == CHANNEL_INSTANCE &&
         propertyIdentifier == PROPERTY_IDENTIFIER_WRITE_STATUS) {
-        *value = 1; // successful
+        *value = g_channelWriteStatus;
         return true;
     }
     return false;
@@ -1041,6 +1063,108 @@ bool GetPropertyCharString(const uint32_t deviceInstance, const uint16_t objectT
 }
 
 // -----------------------------------------------------------------------------
+// 2e. Channel 1's fan-out, followed to its end: Write_Status (cl. 12.53.5/.7)
+//
+// When a WriteGroup names Channel 1, the stack writes the Channel's Present_Value
+// and then "propagate[s] that value to each of the members in the
+// List_Of_Object_Property_References" (cl. 12.53.5): Jade, locally, through
+// SetPropertyReal / SetPropertyNull below, and the Lighting Output on device
+// 389016 with a confirmed WriteProperty it sends itself. Write_Status is
+// IN_PROGRESS while those writes are under way, then SUCCESSFUL, or FAILED if
+// any of them "received an error, reject, or abort" (cl. 12.53.7). A member that
+// never answers is a failure too: the stack reports it through the Timeout hook
+// once APDU_Timeout x (Number_Of_APDU_Retries + 1) has passed (10 s here, the
+// stack's defaults), and a member the stack cannot address - no I-Am from
+// 389016 yet - is skipped by the stack, so it is failed at once.
+//
+// The stack tells the application which writes are a WriteGroup's: it calls
+// WriteGroupInhibitDelay for Channel 1 just before it writes the Channel, and the
+// whole fan-out runs inside that one BACnetStack_Tick(). A WriteProperty or a
+// Schedule write to Channel 1 is NOT propagated by the stack at this pin (stack
+// defect, TODO.md), so it leaves Write_Status as it was: nothing was forwarded.
+// -----------------------------------------------------------------------------
+static bool g_writeGroupExecuting = false;  // WriteGroupInhibitDelay ran for Channel 1 this tick
+static bool g_fanOutStartedThisTick = false; // and the WriteGroup then wrote Channel 1
+static bool g_fanOutLocalFailed = false;     // a local member (Jade) refused its write
+static bool g_fanOutRemoteFailed = false;    // the remote member's write failed / was not sent
+static uint32_t g_remoteWritesOutstanding = 0; // remote writes sent, answer not yet seen
+
+// The remote member's address, from its I-Am (HookIAm). The stack's own
+// Device_Address_Binding is bound by the same I-Am; this copy is how the
+// application recognises the answer to the stack's WriteProperty.
+static bool g_remoteDeviceKnown = false;
+static uint8_t g_remoteDeviceAddress[6] = { 0 };
+static const uint8_t REMOTE_DEVICE_ADDRESS_LENGTH = 6; // BACnet/IP: 4 IP octets + 2 port octets
+
+static const char* WriteStatusName(uint32_t writeStatus) {
+    switch (writeStatus) {
+        case WRITE_STATUS_IDLE:        return "idle";
+        case WRITE_STATUS_IN_PROGRESS: return "in-progress";
+        case WRITE_STATUS_SUCCESSFUL:  return "successful";
+        case WRITE_STATUS_FAILED:      return "failed";
+        default:                       return "(other)";
+    }
+}
+
+// A WriteGroup has just written Channel 1: its writes to the members follow, in
+// this same tick.
+static void BeginChannelFanOut() {
+    g_fanOutStartedThisTick = true;
+    g_fanOutLocalFailed = false;
+    g_fanOutRemoteFailed = false;
+    g_channelWriteStatus = WRITE_STATUS_IN_PROGRESS;
+    if (g_remoteDeviceKnown) {
+        ++g_remoteWritesOutstanding; // the stack sends it a WriteProperty now
+    } else {
+        // The stack only writes to a device it has an address for; it skips this
+        // member. cl. 12.53.9 calls that a communication failure.
+        g_fanOutRemoteFailed = true;
+        printf("FYI: remote device %u has not answered a Who-Is (no I-Am yet), so the stack\n"
+               "     cannot address it: its write is skipped and Write_Status will be FAILED.\n",
+               REMOTE_DEVICE_INSTANCE);
+    }
+    printf("Channel 1 (Garnet) Write_Status = %s\n", WriteStatusName(g_channelWriteStatus));
+}
+
+// A local member's write, as the fan-out made it: accepted (true) or refused.
+static bool NoteLocalMemberWrite(bool accepted) {
+    if (g_writeGroupExecuting && g_fanOutStartedThisTick && !accepted) {
+        g_fanOutLocalFailed = true;
+    }
+    return accepted;
+}
+
+// Once no member's answer is outstanding, Write_Status says how the writes went.
+static void FinishChannelFanOutIfDone() {
+    if (g_channelWriteStatus != WRITE_STATUS_IN_PROGRESS || g_remoteWritesOutstanding > 0) {
+        return;
+    }
+    g_channelWriteStatus = (g_fanOutLocalFailed || g_fanOutRemoteFailed) ? WRITE_STATUS_FAILED
+                                                                          : WRITE_STATUS_SUCCESSFUL;
+    printf("Channel 1 (Garnet) Write_Status = %s%s%s\n", WriteStatusName(g_channelWriteStatus),
+           g_fanOutLocalFailed ? " (a local member refused its write)" : "",
+           g_fanOutRemoteFailed ? " (the remote member's write did not succeed)" : "");
+}
+
+// The answer to the stack's WriteProperty to the remote member arrived (or the
+// stack gave up waiting for it).
+static void NoteRemoteMemberAnswer(const uint8_t* connectionString, uint8_t connectionStringLength,
+                                   bool succeeded, const char* what) {
+    if (!g_remoteDeviceKnown || g_remoteWritesOutstanding == 0 ||
+        connectionStringLength != REMOTE_DEVICE_ADDRESS_LENGTH ||
+        memcmp(connectionString, g_remoteDeviceAddress, REMOTE_DEVICE_ADDRESS_LENGTH) != 0) {
+        return; // not an answer from the remote member
+    }
+    --g_remoteWritesOutstanding;
+    if (!succeeded) {
+        g_fanOutRemoteFailed = true;
+    }
+    printf("Remote member (device %u, Lighting Output %u): %s\n",
+           REMOTE_DEVICE_INSTANCE, REMOTE_OBJECT_INSTANCE, what);
+    FinishChannelFanOutIfDone();
+}
+
+// -----------------------------------------------------------------------------
 // 2b. Property "set" callbacks - the heart of B-SA (DS-WP-B)
 //
 // The stack calls these when a client sends WriteProperty to a commandable
@@ -1077,16 +1201,22 @@ bool SetPropertyReal(const uint32_t deviceInstance, const uint16_t objectType,
         propertyArrayIndex >= 1 && propertyArrayIndex <= BACNET_PRIORITY_ARRAY_SIZE;
     const bool channelPresentValueForm = propertyIdentifier == PROPERTY_IDENTIFIER_PRESENT_VALUE;
     if (c != NULL && objectType == OBJECT_TYPE_CHANNEL && (channelPriorityArrayForm || channelPresentValueForm)) {
+        if (!g_writeGroupExecuting && g_channelWriteStatus == WRITE_STATUS_IN_PROGRESS) {
+            // cl. 12.53.5: not while the last value is still being written out.
+            *errorCode = ERROR_CODE_BUSY;
+            return false;
+        }
         const uint8_t channelPriority = channelPriorityArrayForm ? (uint8_t)propertyArrayIndex : EffectivePriority(priority);
         CommandWrite(c, channelPriority, (double)value);
         g_channelLastPriority = channelPriority;
-        printf("WriteProperty: Channel %u (Garnet) <- %.2f @ priority %u\n",
-               objectInstance, value, channelPriority);
-        printf("FYI: this write does NOT itself fan out to Jade or the remote target -\n"
-               "     only an incoming WriteGroup service request does that (the stack\n"
-               "     resolves it from Channel_Number/Control_Groups + the References\n"
-               "     added with AddObjectPropertyReferenceToChannel). Press 'w' to fire\n"
-               "     the demo WriteGroup.\n");
+        printf("%s: Channel %u (Garnet) <- %.2f @ priority %u\n",
+               g_writeGroupExecuting ? "WriteGroup" : "Write", objectInstance, value, channelPriority);
+        if (g_writeGroupExecuting) {
+            BeginChannelFanOut(); // the stack writes the members next, this tick
+        } else {
+            printf("FYI: this write does NOT fan out to Jade or the remote device: at this\n"
+                   "     stack pin only an incoming WriteGroup does (stack defect, TODO.md).\n");
+        }
         return true;
     }
     (void)useArrayIndex;
@@ -1099,9 +1229,11 @@ bool SetPropertyReal(const uint32_t deviceInstance, const uint16_t objectType,
         // light LEVEL in percent, so unlike the Analog Output we DO bound it to
         // 0..100 (an Analog Output would only reject out-of-band values if it
         // modelled the optional Min_Pres_Value / Max_Pres_Value properties).
+        // A Lighting Output refusing a write is also how Channel 1's fan-out learns
+        // that its local member failed (NoteLocalMemberWrite, section 2e).
         if (objectType == OBJECT_TYPE_LIGHTING_OUTPUT && (value < 0.0f || value > 100.0f)) {
             *errorCode = ERROR_CODE_VALUE_OUT_OF_RANGE;
-            return false;
+            return NoteLocalMemberWrite(false);
         }
         CommandWrite(c, priority, (double)value);
         const char* label = (objectType == OBJECT_TYPE_LIGHTING_OUTPUT)
@@ -1203,11 +1335,19 @@ bool SetPropertyNull(const uint32_t deviceInstance, const uint16_t objectType,
         ((propertyIdentifier == PROPERTY_IDENTIFIER_PRIORITY_ARRAY && useArrayIndex &&
           propertyArrayIndex >= 1 && propertyArrayIndex <= BACNET_PRIORITY_ARRAY_SIZE) ||
          propertyIdentifier == PROPERTY_IDENTIFIER_PRESENT_VALUE)) {
+        if (!g_writeGroupExecuting && g_channelWriteStatus == WRITE_STATUS_IN_PROGRESS) {
+            *errorCode = ERROR_CODE_BUSY; // cl. 12.53.5, as in SetPropertyReal
+            return false;
+        }
         const uint8_t channelPriority = propertyIdentifier == PROPERTY_IDENTIFIER_PRIORITY_ARRAY
             ? (uint8_t)propertyArrayIndex : EffectivePriority(priority);
         CommandRelinquish(c, channelPriority);
-        printf("WriteProperty: relinquished Channel %u (Garnet) @ priority %u\n",
-               objectInstance, (unsigned)channelPriority);
+        g_channelLastPriority = channelPriority;
+        printf("%s: relinquished Channel %u (Garnet) @ priority %u\n",
+               g_writeGroupExecuting ? "WriteGroup" : "Write", objectInstance, (unsigned)channelPriority);
+        if (g_writeGroupExecuting) {
+            BeginChannelFanOut(); // a Null is propagated too (cl. 15.11.2)
+        }
         return true;
     }
     (void)useArrayIndex;
@@ -1640,7 +1780,91 @@ bool WriteGroupInhibitDelay(const uint32_t deviceInstance, const uint32_t channe
     if (deviceInstance != g_deviceInstance || channelInstance != CHANNEL_INSTANCE) {
         return false;
     }
+    // The stack asks this just before it writes Channel 1 for a WriteGroup, so it
+    // also marks the writes that follow, this tick, as the WriteGroup's fan-out
+    // (section 2e).
+    g_writeGroupExecuting = true;
     return false; // never inhibit - respect each reference's configured Execution_Delay
+}
+
+// The remote member's I-Am (DM-DDB-A: this device's Who-Is, or the remote
+// device announcing itself). The stack binds the device's address from the same
+// I-Am; the application keeps a copy to recognise the answers to the stack's
+// WriteProperty to it (section 2e).
+void HookIAm(const uint32_t deviceIdentifier, const uint32_t maxApduLengthAccepted,
+             const uint8_t segmentationSupported, const uint16_t vendorIdentifier,
+             const uint8_t* connectionString, const uint8_t connectionStringLength,
+             const uint32_t networkPortInstance, const uint16_t sourceNetwork,
+             const uint8_t* sourceAddress, const uint8_t sourceAddressLength) {
+    (void)maxApduLengthAccepted;
+    (void)segmentationSupported;
+    (void)vendorIdentifier;
+    (void)networkPortInstance;
+    (void)sourceAddress;
+    (void)sourceAddressLength;
+    if (deviceIdentifier != REMOTE_DEVICE_INSTANCE || sourceNetwork != 0 ||
+        connectionStringLength != REMOTE_DEVICE_ADDRESS_LENGTH) {
+        return; // not the remote member, or not on this network
+    }
+    if (!g_remoteDeviceKnown || memcmp(g_remoteDeviceAddress, connectionString, REMOTE_DEVICE_ADDRESS_LENGTH) != 0) {
+        memcpy(g_remoteDeviceAddress, connectionString, REMOTE_DEVICE_ADDRESS_LENGTH);
+        g_remoteDeviceKnown = true;
+        printf("I-Am: remote device %u is at %u.%u.%u.%u:%u - Channel 1 can write to it now.\n",
+               REMOTE_DEVICE_INSTANCE, connectionString[0], connectionString[1], connectionString[2],
+               connectionString[3], (unsigned)((connectionString[4] << 8) | connectionString[5]));
+    }
+}
+
+// The answers to the stack's WriteProperty to the remote member (section 2e). A
+// SimpleACK is success; an Error, Reject or Abort - or no answer at all, which
+// the stack reports through HookTimeout - is a failure (cl. 12.53.7).
+void HookSimpleAck(const uint8_t originalInvokeId, const uint32_t serverAckChoice,
+                   const uint8_t* connectionString, const uint8_t connectionStringLength,
+                   const uint32_t networkPortInstance, const uint16_t sourceNetwork,
+                   const uint8_t* sourceAddress, const uint8_t sourceAddressLength) {
+    (void)originalInvokeId; (void)networkPortInstance; (void)sourceNetwork; (void)sourceAddress; (void)sourceAddressLength;
+    if (serverAckChoice == SERVICE_WRITE_PROPERTY) {
+        NoteRemoteMemberAnswer(connectionString, connectionStringLength, true, "SimpleACK");
+    }
+}
+
+void HookError(const uint8_t originalInvokeId, const uint32_t errorChoice, const uint32_t errorClass,
+               const uint32_t errorCode, const uint8_t* connectionString, const uint8_t connectionStringLength,
+               const uint32_t networkPortInstance, const uint16_t sourceNetwork, const uint8_t* sourceAddress,
+               const uint8_t sourceAddressLength, const bool useObjectProperty, const uint16_t objectType,
+               const uint32_t objectInstance, const uint32_t propertyIdentifier) {
+    (void)originalInvokeId; (void)networkPortInstance; (void)sourceNetwork; (void)sourceAddress; (void)sourceAddressLength;
+    (void)useObjectProperty; (void)objectType; (void)objectInstance; (void)propertyIdentifier;
+    if (errorChoice == SERVICE_WRITE_PROPERTY) {
+        char what[64];
+        snprintf(what, sizeof(what), "Error (class %u, code %u)", errorClass, errorCode);
+        NoteRemoteMemberAnswer(connectionString, connectionStringLength, false, what);
+    }
+}
+
+void HookReject(const uint8_t originalInvokeId, const uint32_t rejectReason,
+                const uint8_t* connectionString, const uint8_t connectionStringLength,
+                const uint32_t networkPortInstance, const uint16_t sourceNetwork,
+                const uint8_t* sourceAddress, const uint8_t sourceAddressLength) {
+    (void)originalInvokeId; (void)rejectReason; (void)networkPortInstance; (void)sourceNetwork; (void)sourceAddress;
+    (void)sourceAddressLength;
+    NoteRemoteMemberAnswer(connectionString, connectionStringLength, false, "Reject");
+}
+
+void HookAbort(const uint8_t originalInvokeId, const bool sentByServer, const uint32_t abortReason,
+               const uint8_t* connectionString, const uint8_t connectionStringLength,
+               const uint32_t networkPortInstance, const uint16_t sourceNetwork,
+               const uint8_t* sourceAddress, const uint8_t sourceAddressLength) {
+    (void)originalInvokeId; (void)sentByServer; (void)abortReason; (void)networkPortInstance; (void)sourceNetwork;
+    (void)sourceAddress; (void)sourceAddressLength;
+    NoteRemoteMemberAnswer(connectionString, connectionStringLength, false, "Abort");
+}
+
+void HookTimeout(const uint8_t originalInvokeId, const uint8_t* connectionString,
+                 const uint8_t connectionStringLength, const uint32_t networkPortInstance,
+                 const uint16_t sourceNetwork, const uint8_t* sourceAddress, const uint8_t sourceAddressLength) {
+    (void)originalInvokeId; (void)networkPortInstance; (void)sourceNetwork; (void)sourceAddress; (void)sourceAddressLength;
+    NoteRemoteMemberAnswer(connectionString, connectionStringLength, false, "no answer (timeout)");
 }
 
 // 'd' key (DiscoverRemote): a manual Who-Is so the stack's Device_Address_Binding
@@ -1793,6 +2017,14 @@ int main(int argc, char** argv) {
     // fanning the write out to List_Of_Object_Property_References, including the
     // remote reference via the DAB) is entirely stack-internal.
     BACnetStack_RegisterCallbackWriteGroupInhibitDelay(WriteGroupInhibitDelay);
+    // Section 2e: the remote member's I-Am, and the answers to the stack's
+    // WriteProperty to it, which is how Write_Status learns how the fan-out went.
+    BACnetStack_RegisterHookIAm(HookIAm);
+    BACnetStack_RegisterHookSimpleAck(HookSimpleAck);
+    BACnetStack_RegisterHookError(HookError);
+    BACnetStack_RegisterHookReject(HookReject);
+    BACnetStack_RegisterHookAbort(HookAbort);
+    BACnetStack_RegisterHookTimeout(HookTimeout);
 
     // --- Create the device --------------------------------------------------
     if (!BACnetStack_AddDevice(g_deviceInstance)) {
@@ -1972,16 +2204,16 @@ int main(int argc, char** argv) {
         printf("Error: Failed to set Schedule %u's Priority_For_Writing.\n", SCHEDULE_INSTANCE);
         return 1;
     }
-    // What the Schedule drives: Channel 1 (Garnet)'s own Present_Value - a
-    // client reading List_Of_Object_Property_References sees this points right
-    // back at the Channel, so a Schedule-driven write goes through the SAME
-    // Priority_Array + PRIORITY_ARRAY-dispatch mechanism as a manual WriteProperty
-    // to Channel 1 (see SetPropertyReal's F-CHANNEL arm) - it does NOT, on its
-    // own, re-trigger the Channel's WriteGroup fan-out (that only happens for an
-    // actual incoming WriteGroup service request, same as the 'w' key's demo).
+    // What the Schedule drives: Channel 1 (Garnet)'s Present_Value, at
+    // Priority_For_Writing (12). A Channel has no Priority_Array property
+    // (Table 12-62), so the reference names Present_Value, the property a
+    // Schedule writes with a priority (cl. 12.24.11, as a WriteProperty would).
+    // cl. 12.53.5 says the Channel then propagates the value to its members; at
+    // this stack pin it does not - only a WriteGroup fans out (stack defect,
+    // TODO.md) - so the Schedule's value stops at Channel 1.
     if (!BACnetStack_AddScheduleObjectPropertyReference(
             g_deviceInstance, SCHEDULE_INSTANCE, g_deviceInstance, OBJECT_TYPE_CHANNEL,
-            CHANNEL_INSTANCE, PROPERTY_IDENTIFIER_PRIORITY_ARRAY, true, 12)) {
+            CHANNEL_INSTANCE, PROPERTY_IDENTIFIER_PRESENT_VALUE, false, 0)) {
         printf("Error: Failed to point Schedule %u at Channel %u.\n",
                SCHEDULE_INSTANCE, CHANNEL_INSTANCE);
         return 1;
@@ -2163,6 +2395,15 @@ int main(int argc, char** argv) {
     bool running = true;
     while (running) {
         BACnetStack_Tick();
+        // Section 2e: a WriteGroup's fan-out ran inside that tick. The local member
+        // has answered; the remote one answers later, through the hooks.
+        if (g_writeGroupExecuting) {
+            g_writeGroupExecuting = false;
+            if (g_fanOutStartedThisTick) {
+                g_fanOutStartedThisTick = false;
+                FinishChannelFanOutIfDone();
+            }
+        }
 
         switch (CASExampleHelper::PollKey()) {
             case CASExampleHelper::KeyCommand::Help:
