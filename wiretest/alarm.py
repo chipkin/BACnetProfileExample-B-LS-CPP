@@ -3,7 +3,8 @@
 """Encode and decode the alarm, event and device-management services a Wire Test needs.
 
     requests   acknowledge_alarm_request, get_event_information_request,
-               device_communication_control_request, time_synchronization
+               device_communication_control_request, time_synchronization,
+               event_notification (a Peer's Confirmed/UnconfirmedEventNotification, 0.7.0)
     values     context_date_time (a BACnetTimeStamp as dateTime), destination (one
                BACnetDestination, cl. 21 production); the date / time / bit-string /
                character-string encoders live in codec and are re-exported here
@@ -12,14 +13,16 @@
 
 Every production is from ANSI/ASHRAE 135-2024 clause 21 (21.2 confirmed services, 21.3
 unconfirmed services, 21.6 base types); service choices from 21.1. Came from B-AAC's
-tests/alarm_codec.py (wiretest 0.6.0).
+tests/alarm_codec.py (wiretest 0.6.0); event_notification from B-OD's tests/client_peer.py
+and the life-safety event state / type from B-LSC (0.7.0).
 """
 import struct
 
 from . import codec
 from .codec import (application_bit_string, application_date, application_time,  # noqa: F401 (re-exported)
-                    closing, confirmed_request, context_character_string, context_enumerated,
-                    context_object_id, context_unsigned, opening, read_tag, simple_ack)
+                    closing, confirmed_request, context_bit_string, context_boolean, context_character_string,
+                    context_enumerated, context_object_id, context_real, context_unsigned, opening, read_tag,
+                    simple_ack)
 
 # BACnetConfirmedServiceChoice / BACnetUnconfirmedServiceChoice (cl. 21).
 SERVICE_ACKNOWLEDGE_ALARM = 0
@@ -35,23 +38,29 @@ EVENT_STATE_FAULT = 1
 EVENT_STATE_OFFNORMAL = 2
 EVENT_STATE_HIGH_LIMIT = 3
 EVENT_STATE_LOW_LIMIT = 4
+EVENT_STATE_LIFE_SAFETY_ALARM = 5
 NOTIFY_TYPE_ALARM = 0
 NOTIFY_TYPE_EVENT = 1
 NOTIFY_TYPE_ACK_NOTIFICATION = 2
+EVENT_TYPE_CHANGE_OF_STATE = 1
 EVENT_TYPE_OUT_OF_RANGE = 5
+EVENT_TYPE_CHANGE_OF_LIFE_SAFETY = 8
+EVENT_TYPE_CHANGE_OF_RELIABILITY = 19
 
 # BACnetEventTransitionBits: bit 0 to-offnormal, 1 to-fault, 2 to-normal.
 TO_OFFNORMAL, TO_FAULT, TO_NORMAL = 0, 1, 2
 
 # DeviceCommunicationControl 'Enable/Disable' (cl. 21.2; DISABLE (1) is deprecated).
 DCC_ENABLE = 0
+DCC_DISABLE = 1
 DCC_DISABLE_INITIATION = 2
 
 # Error classes and codes (cl. 21 BACnetErrorClass / BACnetErrorCode).
-ERROR_CLASS_SECURITY = 4
+ERROR_CLASS_SECURITY = codec.ERROR_CLASS_SECURITY
 ERROR_CLASS_SERVICES = codec.ERROR_CLASS_SERVICES
 ERROR_CODE_INVALID_TIMESTAMP = 14
-ERROR_CODE_PASSWORD_FAILURE = 26
+ERROR_CODE_PASSWORD_FAILURE = codec.ERROR_CODE_PASSWORD_FAILURE
+ERROR_CODE_SERVICE_REQUEST_DENIED = codec.ERROR_CODE_SERVICE_REQUEST_DENIED
 
 # Properties.
 PROPERTY_ACKED_TRANSITIONS = 0
@@ -114,6 +123,43 @@ def time_synchronization(year, month, day, weekday, hour, minute, second=0):
     """An unconfirmed TimeSynchronization-Request APDU (cl. 21.3)."""
     return (bytes([0x10, SERVICE_TIME_SYNCHRONIZATION]) + application_date(year, month, day, weekday) +
             application_time(hour, minute, second))
+
+
+def event_notification(initiating_device, event_object, to_state, from_state=EVENT_STATE_NORMAL,
+                       confirmed=False, invoke_id=0, process_identifier=1, notification_class=1, priority=100,
+                       notify_type=NOTIFY_TYPE_ALARM, ack_required=True, message_text=None,
+                       time_stamp=(2026, 10, 15, 4, 12, 30, 0), exceeding_value=95.0, exceeded_limit=90.0):
+    """An out-of-range (event type 5) Confirmed- or UnconfirmedEventNotification-Request APDU
+    (cl. 13.8 / 13.9, productions in cl. 21), as a Peer that reports an alarm sends it.
+    `initiating_device` is the Device instance, `event_object` an (object type, instance)
+    pair, `time_stamp` (year, month, day, weekday, hour, minute, second) sent as the dateTime
+    form; `message_text` is optional. An ACK_NOTIFICATION carries no ack-required, from-state
+    or event values. (0.7.0, from B-OD.)"""
+    year, month, day, weekday, hour, minute, second = time_stamp
+    stamp = (application_date(year, month, day, weekday)[1:], application_time(hour, minute, second)[1:])
+    parameters = (context_unsigned(0, process_identifier) +
+                  context_object_id(1, codec.OBJECT_TYPE_DEVICE, initiating_device) +
+                  context_object_id(2, *event_object) +
+                  context_date_time(3, stamp) +
+                  context_unsigned(4, notification_class) +
+                  context_unsigned(5, priority) +
+                  context_enumerated(6, EVENT_TYPE_OUT_OF_RANGE))
+    if message_text is not None:
+        parameters += context_character_string(7, message_text)
+    parameters += context_enumerated(8, notify_type)
+    if notify_type != NOTIFY_TYPE_ACK_NOTIFICATION:
+        parameters += (context_boolean(9, ack_required) + context_enumerated(10, from_state) +
+                       context_enumerated(11, to_state))
+        # [12] eventValues, out-of-range choice [5]: exceedingValue, statusFlags, deadband, exceededLimit.
+        in_alarm = to_state != EVENT_STATE_NORMAL
+        parameters += (opening(12) + opening(5) + context_real(0, exceeding_value) +
+                       context_bit_string(1, [in_alarm, False, False, False]) + context_real(2, 1.0) +
+                       context_real(3, exceeded_limit) + closing(5) + closing(12))
+    else:
+        parameters += context_enumerated(11, to_state)
+    if confirmed:
+        return confirmed_request(invoke_id, SERVICE_CONFIRMED_EVENT_NOTIFICATION, parameters)
+    return bytes([codec.PDU_UNCONFIRMED_REQUEST << 4, SERVICE_UNCONFIRMED_EVENT_NOTIFICATION]) + parameters
 
 
 # ---------------------------------------------------------------------------

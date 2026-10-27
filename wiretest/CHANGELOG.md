@@ -3,6 +3,71 @@
 The shared Wiretest Harness of the BACnet profile example series. Vendored into each
 example; `WIRETEST_VERSION` in `__init__.py` names the version.
 
+## [0.7.0] - 2026-10-16
+
+Folds in the generic helpers the round-3 Profile-functional reworks of B-SS, B-SA,
+B-ASC, B-LD, B-EM, B-EC, B-AEC, B-OD, B-LSC and B-ALSC wrote while 0.6.0 was frozen,
+deduplicated. Additive: every 0.6.0 call keeps its meaning (B-LS, B-BC and B-AAC's
+Wire Tests pass unchanged against it).
+
+### Deduplicated
+
+- ONE quick-retry mechanism: `Client(retries=, timeout=)` and now
+  `Workstation(retries=, timeout=)` share `client.send_with_retries` (same invoke id,
+  a `[RETRY]` line per resend). It replaces B-SS / B-SA / B-ASC's per-call
+  `timeout=` with `retries=3`, B-LD's `Client(retries=2)` with a 1 s per-call timeout,
+  B-EM / B-EC's `ask()` (a new invoke id per retry), B-AEC's `RetryingWorkstation` and
+  B-LSC / B-ALSC's `request_with_retry()`.
+- ONE ReadPropertyMultiple client (`services.read_property_multiple_request`,
+  `parse_read_property_multiple_ack`, `decode_result`; `Client` / `Workstation`
+  `.read_property_multiple()`), from B-EM / B-EC's `property_multiple.py` (keyed by
+  object) and B-AEC's (array indexes): results are
+  `{(object_type, instance): {property or (property, index): octets or ('error', class, code)}}`.
+  `codec.read_access_specification` takes `(property, index)` pairs.
+- ONE ReadRange decoder (`services.read_range_request`, `parse_read_range_ack`,
+  `event_log_records`), from B-AEC's `aec_services.py` and B-ALSC's verbatim copy.
+- ONE simulation-control client (`control.SimulationControl`: `ask()` -> text or None,
+  `send()` raises; visible `[RETRY]`), from B-EM / B-EC's `simulation_control.py` and
+  B-LSC / B-ALSC's `wiretest_extras.SimulationControl`.
+- ONE BACnetLandingCallStatus encoder / decoder (`services.landing_call_status`,
+  `decode_landing_calls`), from B-EC's `landing_call.py` and B-AEC's.
+- ONE server: B-OD's `CommandableServer` is folded into `peer.SimulatedServer` as
+  options, off by default - `commandable=` (a 16-slot priority array per object,
+  cl. 19.2, and cl. 19.2.1's NULL to a non-commandable property), `array_elements=True`
+  (an indexed read answers that element; 0.6.0 ignored the index), `failures`
+  (scripted Reject / Abort / silent / malformed) and `whole_arrays_refused`.
+
+### Added
+
+- `codec`: `parse_read_property_request(apdu, with_array_index=True)` returns the array
+  index as a fourth item (the default 3-tuple is unchanged; B-OD); `reject_pdu`,
+  `abort_pdu`, `application_elements` (B-OD); `application_signed`,
+  `application_octet_string`, `context_signed` (B-AEC); `context_real` (B-LD, B-OD);
+  `context_boolean` (B-EM, B-OD); `context_bit_string` (B-OD); the object types,
+  properties, error classes / codes, Reject / Abort reasons, ReinitializeDevice
+  backup / restore states, `RELIABILITY_MULTI_STATE_FAULT` and `DEVICE_STATUS_*` those
+  helpers name.
+- `services` (new): the RPM client, ReadRange, CreateObject / DeleteObject and
+  AtomicReadFile / AtomicWriteFile (B-AEC); SubscribeCOVPropertyMultiple and
+  `CovNotificationMultiple` (B-EM / B-EC `cov_multiple.py`); LifeSafetyOperation and
+  the life-safety enumerations (B-LSC); BACnetLightingCommand `lighting_command` /
+  `decode_lighting_command` (B-LD); BACnetLandingCallStatus. Each `parse_*` takes the
+  request's `Answer`.
+- `client`: `Answer.acked`, `Answer.reject_reason` (B-SS) and `Answer.abort_reason`;
+  `Client(timeout=)`; `device_communication_control()` and `Client.who_is()` (B-ASC).
+- `workstation`: `retries=`, `timeout=`, `announce()` (B-LSC), and the shared calls.
+- `alarm`: `event_notification()` - a Peer's out-of-range Confirmed- /
+  UnconfirmedEventNotification (B-OD); `EVENT_STATE_LIFE_SAFETY_ALARM`,
+  `EVENT_TYPE_CHANGE_OF_LIFE_SAFETY` (B-LSC), `EVENT_TYPE_CHANGE_OF_STATE`,
+  `EVENT_TYPE_CHANGE_OF_RELIABILITY` (B-EM), `DCC_DISABLE`,
+  `ERROR_CODE_SERVICE_REQUEST_DENIED` (B-ASC).
+- `peer`: `SimulatedDevice.send()` and `simple_acks()` (B-OD).
+- `process`: `Program.wait_for_text(text, seconds, after)` (B-OD); `IAmBroadcasts` - a
+  device's I-Am heartbeat counted on the wire (POSIX) and in its console (B-ASC's
+  `Heartbeats`).
+- `control` (new): `SimulationControl` (above) and `CommandFile` (B-OD).
+- `wait`: `sample()`, `sleep_until()` and `monotonic()` (B-LD).
+
 ## [0.6.0] - 2026-10-15
 
 Folds in the generic helpers the phase-2 reworks of B-LS, B-BC and B-AAC wrote while

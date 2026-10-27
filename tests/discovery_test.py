@@ -3,7 +3,7 @@
 # Public-domain example code (CC0) - see ../LICENSE.
 """B-LS discovery: read every property the lighting supervisor says it has, the way a client does.
 
-    python3 tests/discovery_test.py [--exe build/BACnetExampleBLS] [--port 47821]
+    python3 tests/discovery_test.py [--exe build/BACnetExampleBLS] [--port 47840]
 
 What a BACnet client such as Chipkin BACnet Explorer does when it discovers a device,
 done over the wire from outside the example:
@@ -59,6 +59,7 @@ EXPECTED_OBJECTS = [DEVICE,
 
 # The four properties cl. 12.1.1.4.1 says Property_List does not contain.
 PROPERTY_OBJECT_TYPE = 79
+PROPERTY_DESCRIPTION = 28
 NOT_IN_PROPERTY_LIST = [wiretest.PROPERTY_OBJECT_IDENTIFIER, wiretest.PROPERTY_OBJECT_NAME,
                         PROPERTY_OBJECT_TYPE, wiretest.PROPERTY_PROPERTY_LIST]
 
@@ -87,8 +88,8 @@ def parser():
     arguments = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     arguments.add_argument("--exe", default=str(wiretest.default_exe(REPOSITORY, "BACnetExampleBLS")),
                            help="path to BACnetExampleBLS (default: build/BACnetExampleBLS)")
-    arguments.add_argument("--port", type=int, default=47821,
-                           help="the lighting supervisor's UDP port (default 47821)")
+    arguments.add_argument("--port", type=int, default=47840,
+                           help="the lighting supervisor's UDP port (default 47840)")
     return arguments
 
 
@@ -172,6 +173,14 @@ def main():
                f"{len(unreadable)} unreadable: " + ", ".join(
                    f"{object_text(object_identifier)} {property_identifier}"
                    for object_identifier, property_identifier in unreadable) if unreadable else "")
+
+        # The Device's Description reads as its text: a value of 256 octets or more is refused by the
+        # stack and reads as an empty string, which the walk above would still count as a value.
+        description = client.read_property(args.port, *DEVICE, PROPERTY_DESCRIPTION, timeout=2.0)
+        text = description.value if is_value(description) else None
+        record("Device Description reads as its text, not an empty string (the stack holds at most 255 octets)",
+               isinstance(text, str) and text.startswith("Chipkin CAS BACnet Stack Example - B-LS"),
+               f"read {text!r}" if is_value(description) else outcome(description))
 
         # The three Explorer reported, by name - listed in Property_List and readable.
         network_port_list = property_lists.get(NETWORK_PORT, [])

@@ -7,15 +7,17 @@ fail when the example's Profile Function is removed. See the series glossary
 
 | Module | What it gives a test |
 |---|---|
-| `codec` | Build and parse BVLL (Annex J, including the BBMD and foreign-device messages), NPDU (clause 6: DNET/DADR, SNET/SADR, network layer messages) and APDU (clause 20) octets |
+| `codec` | Build and parse BVLL (Annex J, including the BBMD and foreign-device messages), NPDU (clause 6: DNET/DADR, SNET/SADR, network layer messages) and APDU (clause 20) octets; Reject / Abort PDUs; `parse_read_property_request(apdu, with_array_index=True)` keeps the index |
 | `endpoint` | `Endpoint` - a UDP socket that sends frames and collects replies (`clear()` to start fresh, `mac` for its B/IP address); `broadcast_listener` - capture what an example broadcasts (Linux/macOS) |
-| `client` | `Client` - ReadProperty / WriteProperty with invoke ids, optionally through a router (`dnet=`, `dadr=`), with an opt-in visible retry (`retries=`); `Answer` (`ok`, `value`, `error`) |
-| `process` | `start(exe, arguments, label, environment=None)` - run an example until its `ready` line; `Program.press(keys)` (menu keys, POSIX); `Program.stop()`; `broadcast_address(console, port)` |
-| `peer` | `SimulatedDevice` - a Python BACnet/IP device (ReadProperty of its Device object, Who-Is/I-Am) that answers back through a router; `broadcast=(ip, port)` also makes it hear its network's broadcasts (Linux/macOS) |
-| `peer` (0.6.0) | `SimulatedServer` - a Peer whose objects answer ReadProperty, ReadPropertyMultiple and WriteProperty, with `mode` online / offline / refusing, write hooks and request bookkeeping |
-| `alarm` | AcknowledgeAlarm, GetEventInformation, DeviceCommunicationControl, TimeSynchronization; `EventNotification` decoding |
-| `workstation` | `Workstation` - a client that is also an event-notification recipient |
-| `wait` | `wait_until(check, seconds)` |
+| `client` | `Client` - confirmed requests with invoke ids (`read_property`, `write_property`, `read_property_multiple`, `device_communication_control`, `who_is`), optionally through a router (`dnet=`, `dadr=`), with a short `timeout=` and visible `retries=`; `Answer` (`ok`, `acked`, `value`, `error`, `reject_reason`, `abort_reason`) |
+| `services` (0.7.0) | ReadPropertyMultiple client side, ReadRange and Event Log records, CreateObject / DeleteObject, AtomicReadFile / AtomicWriteFile, SubscribeCOVPropertyMultiple and COV notifications, LifeSafetyOperation, BACnetLandingCallStatus, BACnetLightingCommand |
+| `process` | `start(exe, arguments, label, environment=None)` - run an example until its `ready` line; `Program.press(keys)` (menu keys, POSIX); `Program.wait_for_text(text, seconds, after)`; `Program.stop()`; `broadcast_address(console, port)`; `IAmBroadcasts` - count a device's I-Am heartbeat on the wire and in its console |
+| `control` (0.7.0) | `SimulationControl` - the client of an example's loopback test control channel; `CommandFile` - an example's test-only command file |
+| `peer` | `SimulatedDevice` - a Python BACnet/IP device (ReadProperty of its Device object, Who-Is/I-Am) that answers back through a router; `broadcast=(ip, port)` also makes it hear its network's broadcasts (Linux/macOS); `send()`, `simple_acks()` |
+| `peer` (0.6.0) | `SimulatedServer` - a Peer whose objects answer ReadProperty, ReadPropertyMultiple and WriteProperty, with `mode` online / offline / refusing, write hooks and request bookkeeping; 0.7.0 options `commandable=` (priority arrays), `array_elements=True`, `failures` (Reject / Abort / silent / malformed) and `whole_arrays_refused` |
+| `alarm` | AcknowledgeAlarm, GetEventInformation, DeviceCommunicationControl, TimeSynchronization; `EventNotification` decoding; `event_notification()` encoding (a Peer's alarm) |
+| `workstation` | `Workstation` - a client that is also an event-notification recipient, with the same `timeout=` / `retries=` as `Client`, and `announce()` |
+| `wait` | `wait_until(check, seconds)`; `sample(read, seconds, interval)`, `sleep_until(start, seconds)`, `monotonic(values, rising)` |
 | `results` | `record` (a counted check), `known_gap` (a reported defect outside the example), `summary` (exit code) |
 
 ```python

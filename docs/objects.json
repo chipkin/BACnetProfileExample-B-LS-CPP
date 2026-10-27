@@ -22,17 +22,17 @@
         "Max_APDU_Length_Accepted",
         "Segmentation_Supported",
         "APDU_Timeout",
-        "Number_Of_APDU_Retries",
-        "Database_Revision"
+        "Number_Of_APDU_Retries"
       ],
-      "note": "the device itself; the instance is configurable with --deviceID. The stack rows are device-wide facts only the stack knows - the protocol version and revision it implements, the services and object types it was configured with, the live object list and address-binding table. The accepted rows are the stack's configured defaults for APDU limits, segmentation, system status and database revision; an application that answered them from its own constants could contradict the stack, so this example does not",
+      "note": "the device itself; the instance is configurable with --deviceID and the Object_Name with --deviceName (both at start-up; the heading shows the defaults). The stack rows are device-wide facts only the stack knows - the protocol version and revision it implements, the services and object types it was configured with, the live object list and address-binding table, and Database_Revision, which the stack starts at 0 and increments as the objects are added at start-up: it reads 12 and stays 12, because nothing creates, deletes or renames an object afterwards (a command, a WriteGroup, a Schedule write, a time sync or a DeviceCommunicationControl changes no object). The accepted rows are the stack's configured defaults for APDU limits, segmentation and system status; an application that answered them from its own constants could contradict the stack, so this example does not",
       "stack": [
         "Object_List",
         "Protocol_Version",
         "Protocol_Revision",
         "Protocol_Services_Supported",
         "Protocol_Object_Types_Supported",
-        "Device_Address_Binding"
+        "Device_Address_Binding",
+        "Database_Revision"
       ]
     },
     {
@@ -103,12 +103,14 @@
         "Object_Name", "Tracking_Value", "Lighting_Command", "In_Progress",
         "Out_Of_Service", "Blink_Warn_Enable", "Egress_Time", "Egress_Active",
         "Default_Fade_Time", "Default_Ramp_Rate", "Default_Step_Increment",
-        "Relinquish_Default", "Lighting_Command_Default_Priority"
+        "Relinquish_Default", "Lighting_Command_Default_Priority",
+        "Last_On_Value", "Default_On_Value"
       ],
       "enabled": [],
-      "writable": ["Present_Value", "Lighting_Command"],
+      "writable": ["Present_Value", "Lighting_Command", "Default_Fade_Time", "Default_Ramp_Rate",
+                   "Default_Step_Increment", "Egress_Time"],
       "accepted": [],
-      "note": "REAL 0-100%; commandable via a 16-slot Priority_Array (WriteProperty/DS-WP-B) AND via the typed Lighting_Command SEQUENCE (DS-LO-B). This is B-LD's canonical F-LIGHT object. Tracking_Value mirrors Present_Value in this example (an instant-completion simulation, not a real fading driver). Blink_Warn_Enable is on; Egress_Active is always false because nothing in this example drives the egress timer."
+      "note": "REAL 0-100%; commandable via a 16-slot Priority_Array (WriteProperty/DS-WP-B) AND via the typed Lighting_Command SEQUENCE (DS-LO-B). The lighting engine is B-LD-CPP's (main.cpp section 1b): it runs every Table 12-67 operation over time - Present_Value is the target, Tracking_Value the level being driven, In_Progress fadeActive/rampActive while it moves, Egress_Active TRUE during a warn's egress time; NONE is refused. Jade is also Channel 1's local member, so a Channel write, a WriteGroup or Schedule 1 writes its Present_Value the same way. The dimming defaults and Egress_Time are writable, range-checked. Last_On_Value and Default_On_Value (100.0; required in 135-2024, cl. 12.54.44/45) are served by the app, Current_Command_Priority and Property_List by the stack."
     },
     {
       "type": "Channel",
@@ -121,7 +123,7 @@
       "enabled": ["Channel_Number", "Control_Groups"],
       "writable": ["Present_Value", "Channel_Number", "Control_Groups"],
       "accepted": [],
-      "note": "F-CHANNEL / F-EXTWRITE (canonical). BACnetChannelValue REAL, commandable via a 16-slot Priority_Array the application holds. At 64b2cfac5 every write to it (client WriteProperty, WriteGroup, the Schedule) reaches SetPropertyReal/SetPropertyNull on PRESENT_VALUE with a priority, not on PRIORITY_ARRAY with an index as BACnetStack_AddChannelObject's doc says, so both shapes are accepted (stack #3955, TODO.md). List_Of_Object_Property_References and Execution_Delay are stack-held, set with BACnetStack_AddObjectPropertyReferenceToChannel: one local reference to Lighting Output 1 (Jade), one remote reference to device 389016's Lighting Output 1. A matching WriteGroup (DS-WG-E-B) fans the value out to both: Jade through the Set callbacks, device 389016 with a WriteProperty the stack sends through its Device_Address_Binding (both proved by tests/channel_fanout_test.py). Write_Status is kept by the application from those writes' results (main.cpp section 2e): IDLE at start-up, IN_PROGRESS while a member's answer is outstanding, then SUCCESSFUL or FAILED (cl. 12.53.7); a WriteProperty of Present_Value while IN_PROGRESS is refused with BUSY (sent as class PROPERTY by the stack, TODO.md). Last_Priority starts at 16 (cl. 12.53.6). A WriteProperty or Schedule write to Present_Value is not propagated at this pin, contrary to cl. 12.53.5 (stack #3956, TODO.md)."
+      "note": "F-CHANNEL / F-EXTWRITE (canonical). BACnetChannelValue REAL, commandable via a 16-slot Priority_Array the application holds. At 64b2cfac5 every write to it (client WriteProperty, WriteGroup, the Schedule) reaches SetPropertyReal/SetPropertyNull on PRESENT_VALUE with a priority, not on PRIORITY_ARRAY with an index as BACnetStack_AddChannelObject's doc says, so both shapes are accepted (stack #3955, TODO.md). List_Of_Object_Property_References and Execution_Delay are stack-held, set with BACnetStack_AddObjectPropertyReferenceToChannel: one local reference to Lighting Output 1 (Jade), one remote reference to device 389016's Lighting Output 1. Every write to Present_Value - a matching WriteGroup (DS-WG-E-B), a WriteProperty or Schedule 1's write - is forwarded to both (cl. 12.53.5): Jade through the Set callbacks, device 389016 with a WriteProperty the stack sends through its Device_Address_Binding (proved by tests/channel_fanout_test.py). Write_Status is kept by the application from those writes' results (main.cpp section 2e): IDLE until the first write, IN_PROGRESS while a member's answer is outstanding, then SUCCESSFUL or FAILED (cl. 12.53.7) - FAILED after Schedule 1's start-up write, which is made before device 389016 is bound; a WriteProperty of Present_Value while IN_PROGRESS is refused with OBJECT / BUSY. Last_Priority starts at 16 (cl. 12.53.6)."
     },
     {
       "type": "Schedule",
@@ -131,7 +133,7 @@
       "enabled": [],
       "writable": [],
       "accepted": ["Reliability", "Present_Value", "Effective_Period", "Priority_For_Writing"],
-      "note": "F-SCHED-E (canonical). Present_Value, Effective_Period and Priority_For_Writing are genuinely served - by the STACK's own Schedule engine, configured through the dedicated API (BACnetStack_AddScheduleObject, AddScheduleWeeklyTimeValue [09:00 on / 17:00 off daily], SetScheduleDefault, SetScheduleEffectivePeriod, SetSchedulePriorityForWriting [12]) rather than a GetProperty callback, which is what this generator's simple app/stack heuristic looks for; they are listed as accepted only because the generator has no third category for 'served by a dedicated stack API, not a callback'. AddScheduleObjectPropertyReference points the Schedule at Channel 1's Present_Value, written at Priority_For_Writing 12 (until v1.2.0 it named the Channel's Priority_Array, which a Channel does not have); one demo AddScheduleExceptionEventWithCalendarEntry covers today from 00:00:05, so it is in effect from start-up. At 64b2cfac5 the Schedule's write is stored on Channel 1 but not propagated to its members (stack defect, TODO.md). Reliability has no fault condition this example detects, so it is accepted at the generic default (normal), the same pattern as Network Port's Reliability below."
+      "note": "F-SCHED-E (canonical). Present_Value, Effective_Period and Priority_For_Writing are genuinely served - by the STACK's own Schedule engine, configured through the dedicated API (BACnetStack_AddScheduleObject, AddScheduleWeeklyTimeValue [09:00 on / 17:00 off daily], SetScheduleDefault, SetScheduleEffectivePeriod, SetSchedulePriorityForWriting [12]) rather than a GetProperty callback, which is what this generator's simple app/stack heuristic looks for; they are listed as accepted only because the generator has no third category for 'served by a dedicated stack API, not a callback'. AddScheduleObjectPropertyReference points the Schedule at Channel 1's Present_Value, written at Priority_For_Writing 12 (until v1.2.0 it named the Channel's Priority_Array, which a Channel does not have); one demo AddScheduleExceptionEventWithCalendarEntry covers today from 00:00:05, so it is in effect from start-up. Channel 1 forwards the Schedule's write to its members (cl. 12.53.5). Reliability has no fault condition this example detects, so it is accepted at the generic default (normal), the same pattern as Network Port's Reliability below."
     },
     {
       "type": "Calendar",

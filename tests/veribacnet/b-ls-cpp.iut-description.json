@@ -1,0 +1,634 @@
+{
+  "capabilities": {
+    "maxApduLength": 1476,
+    "maxSegmentsAccepted": 16,
+    "objectTypesSupported": [
+      "analogInput",
+      "analogOutput",
+      "binaryInput",
+      "binaryOutput",
+      "calendar",
+      "device",
+      "multiStateInput",
+      "multiStateOutput",
+      "schedule",
+      "channel",
+      "lightingOutput",
+      "networkPort"
+    ],
+    "segmentation": "both",
+    "servicesExecuted": [
+      "readProperty",
+      "writeProperty",
+      "writeGroup",
+      "deviceCommunicationControl",
+      "timeSynchronization",
+      "utcTimeSynchronization",
+      "iAm",
+      "whoHas",
+      "whoIs"
+    ],
+    "servicesSupported": [
+      "readProperty",
+      "writeProperty",
+      "deviceCommunicationControl",
+      "iAm",
+      "iHave",
+      "timeSynchronization",
+      "whoHas",
+      "whoIs",
+      "utcTimeSynchronization",
+      "writeGroup"
+    ]
+  },
+  "conflicts": [],
+  "declared": {
+    "bibbs": [
+      "DS-RP-B",
+      "DS-WP-A",
+      "DS-WP-B",
+      "DS-WG-E-B",
+      "DS-ALO-A",
+      "SCHED-E-B",
+      "DM-DDB-A",
+      "DM-DDB-B",
+      "DM-DOB-B",
+      "DM-DCC-B",
+      "DM-TS-B",
+      "DM-UTC-B"
+    ],
+    "options": {
+      "3.54::Supports blink-warn": "Blink_Warn_Enable is TRUE and Lighting_Command warn / warnOff / warnRelinquish blink and wait Egress_Time (main.cpp section 1b; Wire Test warn_test.py).",
+      "4.5::Can command and relinquish with a priority": "The forwarded WriteProperty carries the Channel write's priority, and a Null written to Channel 1 is forwarded as a relinquish at that priority (cl. 12.53.5; channel_fanout_test.py checks priority 8 and 9).",
+      "4.5::Can write REAL property values": "The forwarded value is a REAL (Channel 1 is a REAL Channel; device 389016 Lighting Output 1 Present_Value).",
+      "4.5::Can write non-array properties": "Channel 1 forwards every write (WriteProperty, WriteGroup, Schedule 1) to device 389016 Lighting Output 1 Present_Value, a non-array property, with a WriteProperty the stack sends (main.cpp section 2e; Wire Test channel_fanout_test.py).",
+      "4.6::Contains commandable properties": "Analog / Binary / Multi-State Output 1, Lighting Output 1 and Channel 1 Present_Value are commandable (16-slot Priority_Array).",
+      "4.6::Contains writable Enumerated properties": "Binary Output 1 Present_Value (ENUMERATED, 0 / 1) is writable.",
+      "4.6::Contains writable REAL properties": "Analog Output 1 and Lighting Output 1 Present_Value, Lighting Output 1 Default_Ramp_Rate and Default_Step_Increment, Channel 1 Present_Value (REAL) are writable.",
+      "4.6::Contains writable Unsigned properties": "Multi-State Output 1 Present_Value, Channel 1 Channel_Number, Lighting Output 1 Default_Fade_Time and Egress_Time (Unsigned) are writable, range-checked.",
+      "4.6::Contains writable array properties": "Channel 1 Control_Groups elements are writable (main.cpp SetPropertyUnsignedInteger, Control_Groups[1]).",
+      "4.6::Contains writable non-array properties": "Analog / Binary / Multi-State Output 1 Present_Value, Channel 1 Present_Value and Channel_Number, Lighting Output 1 Present_Value, Lighting_Command, Default_Fade_Time, Default_Ramp_Rate, Default_Step_Increment and Egress_Time (main.cpp SetPropertyWritable).",
+      "4.6::Contains writable properties with non-basic data types": "Lighting Output 1 Lighting_Command (BACnetLightingCommand) is writable; writing it commands the light (main.cpp section 1b).",
+      "8.14::Supports receiving a DeviceCommunicationControl service request with an indefinite duration": "The DeviceCommunicationControl callback accepts a request with no Time_Duration (useTimeDuration false); the stack runs the state machine."
+    },
+    "source": "operator"
+  },
+  "discovered": {
+    "capturedAt": "2026-10-24T22:39:15.652Z",
+    "readDeviceProperties": {
+      "applicationSoftwareVersion": "1.3.0",
+      "firmwareRevision": "6.0.23.0",
+      "modelName": "CAS BACnet Stack Example - B-LS",
+      "objectName": "Chipkin Example B-LS",
+      "protocolRevision": 30,
+      "protocolVersion": 1,
+      "vendorId": 389,
+      "vendorName": "Chipkin Automation Systems"
+    },
+    "whoIsResults": [
+      {
+        "deviceInstance": 389017,
+        "maxApdu": 1476,
+        "segmentation": "both",
+        "vendorId": 389
+      }
+    ]
+  },
+  "identity": {
+    "applicationSoftwareVersion": "1.3.0",
+    "deviceInstance": 389017,
+    "firmwareRevision": "6.0.23.0",
+    "modelName": "CAS BACnet Stack Example - B-LS",
+    "objectName": "Chipkin Example B-LS",
+    "protocolRevision": 30,
+    "protocolVersion": 1,
+    "vendorId": 389,
+    "vendorName": "Chipkin Automation Systems"
+  },
+  "network": {
+    "address": {
+      "ip": "127.0.0.1",
+      "port": 47840
+    },
+    "transport": "bacnetIp"
+  },
+  "objects": [
+    {
+      "objectIdentifier": {
+        "instance": 1,
+        "type": "analogInput"
+      },
+      "objectName": "Bronze",
+      "properties": {
+        "outOfService": {
+          "tag": "boolean",
+          "value": false
+        },
+        "units": {
+          "name": "degreesCelsius",
+          "tag": "enumerated",
+          "value": 62
+        }
+      }
+    },
+    {
+      "commandable": true,
+      "objectIdentifier": {
+        "instance": 1,
+        "type": "analogOutput"
+      },
+      "objectName": "Chartreuse",
+      "properties": {
+        "outOfService": {
+          "tag": "boolean",
+          "value": false
+        },
+        "relinquishDefault": {
+          "tag": "real",
+          "value": 20
+        },
+        "units": {
+          "name": "degreesCelsius",
+          "tag": "enumerated",
+          "value": 62
+        }
+      },
+      "writable": true
+    },
+    {
+      "objectIdentifier": {
+        "instance": 1,
+        "type": "binaryInput"
+      },
+      "objectName": "Emerald",
+      "properties": {
+        "outOfService": {
+          "tag": "boolean",
+          "value": false
+        },
+        "polarity": {
+          "name": "normal",
+          "tag": "enumerated",
+          "value": 0
+        }
+      }
+    },
+    {
+      "commandable": true,
+      "objectIdentifier": {
+        "instance": 1,
+        "type": "binaryOutput"
+      },
+      "objectName": "Fuchsia",
+      "properties": {
+        "outOfService": {
+          "tag": "boolean",
+          "value": false
+        },
+        "polarity": {
+          "name": "normal",
+          "tag": "enumerated",
+          "value": 0
+        },
+        "relinquishDefault": {
+          "name": "inactive",
+          "tag": "enumerated",
+          "value": 0
+        }
+      },
+      "writable": true
+    },
+    {
+      "objectIdentifier": {
+        "instance": 1,
+        "type": "calendar"
+      },
+      "objectName": "Cream",
+      "properties": {}
+    },
+    {
+      "objectIdentifier": {
+        "instance": 389017,
+        "type": "device"
+      },
+      "objectName": "Chipkin Example B-LS",
+      "properties": {
+        "databaseRevision": {
+          "tag": "unsignedInt",
+          "value": 12
+        },
+        "maxApduLengthAccepted": {
+          "tag": "unsignedInt",
+          "value": 1476
+        },
+        "protocolRevision": {
+          "tag": "unsignedInt",
+          "value": 30
+        },
+        "protocolVersion": {
+          "tag": "unsignedInt",
+          "value": 1
+        },
+        "vendorIdentifier": {
+          "tag": "unsignedInt",
+          "value": 389
+        }
+      }
+    },
+    {
+      "objectIdentifier": {
+        "instance": 1,
+        "type": "multiStateInput"
+      },
+      "objectName": "Hot Pink",
+      "properties": {
+        "numberOfStates": {
+          "tag": "unsignedInt",
+          "value": 3
+        },
+        "outOfService": {
+          "tag": "boolean",
+          "value": false
+        },
+        "stateText": {
+          "tag": "constructed",
+          "value": [
+            {
+              "tag": "characterString",
+              "value": "On"
+            },
+            {
+              "tag": "characterString",
+              "value": "Off"
+            },
+            {
+              "tag": "characterString",
+              "value": "Auto"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "commandable": true,
+      "objectIdentifier": {
+        "instance": 1,
+        "type": "multiStateOutput"
+      },
+      "objectName": "Indigo",
+      "properties": {
+        "numberOfStates": {
+          "tag": "unsignedInt",
+          "value": 3
+        },
+        "outOfService": {
+          "tag": "boolean",
+          "value": false
+        },
+        "relinquishDefault": {
+          "tag": "unsignedInt",
+          "value": 1
+        }
+      },
+      "writable": true
+    },
+    {
+      "objectIdentifier": {
+        "instance": 1,
+        "type": "schedule"
+      },
+      "objectName": "Saffron",
+      "properties": {
+        "outOfService": {
+          "tag": "boolean",
+          "value": false
+        },
+        "priorityForWriting": {
+          "tag": "unsignedInt",
+          "value": 12
+        }
+      }
+    },
+    {
+      "objectIdentifier": {
+        "instance": 1,
+        "type": "channel"
+      },
+      "objectName": "Garnet",
+      "properties": {
+        "outOfService": {
+          "tag": "boolean",
+          "value": false
+        }
+      },
+      "writable": true
+    },
+    {
+      "commandable": true,
+      "objectIdentifier": {
+        "instance": 1,
+        "type": "lightingOutput"
+      },
+      "objectName": "Jade",
+      "properties": {
+        "blinkWarnEnable": {
+          "tag": "boolean",
+          "value": true
+        },
+        "defaultOnValue": {
+          "tag": "real",
+          "value": 100
+        },
+        "lightingCommandDefaultPriority": {
+          "tag": "unsignedInt",
+          "value": 16
+        },
+        "outOfService": {
+          "tag": "boolean",
+          "value": false
+        },
+        "relinquishDefault": {
+          "tag": "real",
+          "value": 0
+        }
+      },
+      "writable": true
+    },
+    {
+      "objectIdentifier": {
+        "instance": 1,
+        "type": "networkPort"
+      },
+      "objectName": "Vermilion",
+      "properties": {
+        "apduLength": {
+          "tag": "unsignedInt",
+          "value": 1476
+        },
+        "networkType": {
+          "name": "ipv4",
+          "tag": "enumerated",
+          "value": 5
+        },
+        "outOfService": {
+          "tag": "boolean",
+          "value": false
+        },
+        "protocolLevel": {
+          "name": "bacnetApplication",
+          "tag": "enumerated",
+          "value": 2
+        }
+      }
+    }
+  ],
+  "provenance": {
+    "epicsHeader": {
+      "characterSetsSupported": "derived",
+      "dataLinkOptions": "derived",
+      "deviceProfile": "user-entered",
+      "productDescription": "user-entered",
+      "productName": "user-entered",
+      "specialFunctionality": "derived"
+    },
+    "generatedAt": "2026-10-24T22:39:32.897Z",
+    "snapshotCapturedAt": "2026-10-24T22:39:15.652Z",
+    "testPoints": 4
+  },
+  "testDatabase": {
+    "commandableTestPoints": [
+      {
+        "defaultPriority": 16,
+        "objectIdentifier": {
+          "instance": 1,
+          "type": "analogOutput"
+        },
+        "propertyIdentifier": "presentValue"
+      },
+      {
+        "defaultPriority": 16,
+        "objectIdentifier": {
+          "instance": 1,
+          "type": "binaryOutput"
+        },
+        "propertyIdentifier": "presentValue"
+      },
+      {
+        "defaultPriority": 16,
+        "objectIdentifier": {
+          "instance": 1,
+          "type": "multiStateOutput"
+        },
+        "propertyIdentifier": "presentValue"
+      }
+    ],
+    "deviceConfigurationScenario": {
+      "notes": "The Device object is the only object whose identity can change, and only by start-up configuration: restart the example with --deviceID <n> or --deviceName <text>. A WriteProperty to the Device's Object_Name or Object_Identifier is refused (write-access-denied), so nothing changes over the network.",
+      "objectNameChangeMethod": "replaceConfiguration",
+      "safeAlternateObjectIdentifier": {
+        "instance": 389917,
+        "type": "device"
+      },
+      "safeAlternateObjectName": "Chipkin Example B-LS Alt"
+    },
+    "identityMutationTestPoints": [
+      {
+        "notes": "The Device object is the only object whose identity can change, and only by start-up configuration: restart the example with --deviceID <n> or --deviceName <text>. A WriteProperty to the Device's Object_Name or Object_Identifier is refused (write-access-denied), so nothing changes over the network.",
+        "objectIdentifier": {
+          "instance": 389017,
+          "type": "device"
+        },
+        "safeAlternateObjectIdentifier": {
+          "instance": 389917,
+          "type": "device"
+        },
+        "safeAlternateObjectName": "Chipkin Example B-LS Alt"
+      }
+    ],
+    "multiStateInputStateTextScenario": {
+      "initialSize": 3,
+      "numberOfStatesPropertyIdentifier": "numberOfStates",
+      "objectIdentifier": {
+        "instance": 1,
+        "type": "multiStateInput"
+      },
+      "stateTextPropertyIdentifier": "stateText"
+    },
+    "networkPort": {
+      "activeOne": {
+        "objectIdentifier": {
+          "instance": 1,
+          "type": "networkPort"
+        }
+      }
+    },
+    "objectDeletion": "none",
+    "passwords": {},
+    "rebootWindow": {
+      "activateChangesMs": 30000,
+      "coldstartMs": 60000,
+      "warmstartMs": 30000
+    },
+    "remoteWhoHasExecution": {
+      "allowedResponseNpdus": [
+        {
+          "destination": {
+            "dnet": 65535
+          }
+        },
+        {
+          "destination": {
+            "dnet": 99
+          }
+        },
+        {
+          "destination": {
+            "dadr": "01",
+            "dnet": 99
+          }
+        }
+      ],
+      "notes": [
+        "TD-side choice for the remote-network Who-Has / Who-Is rows (135.1 9.32.2.x, 9.33.2.x): remote network X = 99, source address Y = 01. The allowed response paths are the clause three: global broadcast, remote broadcast to X, the TD on X."
+      ],
+      "requestNpdu": {
+        "destination": {
+          "dnet": "globalBroadcast"
+        },
+        "source": {
+          "sadr": "01",
+          "snet": 99
+        }
+      }
+    },
+    "timeouts": {
+      "apdu": 3000,
+      "reply": 1000,
+      "segment": 1000
+    },
+    "writableTestPoints": [
+      {
+        "notes": "Setpoint; accepts any REAL (no Min_Pres_Value / Max_Pres_Value). Nothing else commands it.",
+        "objectIdentifier": {
+          "instance": 1,
+          "type": "analogOutput"
+        },
+        "propertyIdentifier": "presentValue",
+        "suggestedTestValue": 24,
+        "writePriority": 16
+      },
+      {
+        "notes": "Relay; 0 inactive / 1 active, else value-out-of-range.",
+        "objectIdentifier": {
+          "instance": 1,
+          "type": "binaryOutput"
+        },
+        "propertyIdentifier": "presentValue",
+        "suggestedTestValue": 1,
+        "writePriority": 16
+      },
+      {
+        "notes": "States 1 .. 3, else value-out-of-range.",
+        "objectIdentifier": {
+          "instance": 1,
+          "type": "multiStateOutput"
+        },
+        "propertyIdentifier": "presentValue",
+        "suggestedTestValue": 2,
+        "writePriority": 16
+      },
+      {
+        "notes": "Channel 1 Channel_Number, Unsigned16, not commandable (the priority is ignored); application-held (main.cpp). Changing it only changes which WriteGroup channel number Channel 1 answers to.",
+        "objectIdentifier": {
+          "instance": 1,
+          "type": "channel"
+        },
+        "propertyIdentifier": "channelNumber",
+        "suggestedTestValue": 2
+      },
+      {
+        "notes": "Default_Fade_Time, Unsigned ms, 100 .. 86400000, else value-out-of-range; not commandable.",
+        "objectIdentifier": {
+          "instance": 1,
+          "type": "lightingOutput"
+        },
+        "propertyIdentifier": "defaultFadeTime",
+        "suggestedTestValue": 5000
+      },
+      {
+        "maxRealValue": 100,
+        "notes": "Default_Ramp_Rate, REAL %/s, 0.1 .. 100.0, else value-out-of-range; not commandable.",
+        "objectIdentifier": {
+          "instance": 1,
+          "type": "lightingOutput"
+        },
+        "propertyIdentifier": "defaultRampRate",
+        "suggestedTestValue": 20
+      },
+      {
+        "maxRealValue": 100,
+        "notes": "Default_Step_Increment, REAL %, 0.1 .. 100.0, else value-out-of-range; not commandable.",
+        "objectIdentifier": {
+          "instance": 1,
+          "type": "lightingOutput"
+        },
+        "propertyIdentifier": "defaultStepIncrement",
+        "suggestedTestValue": 10
+      },
+      {
+        "notes": "Egress_Time, Unsigned seconds; not commandable.",
+        "objectIdentifier": {
+          "instance": 1,
+          "type": "lightingOutput"
+        },
+        "propertyIdentifier": "egressTime",
+        "suggestedTestValue": 60
+      }
+    ],
+    "writeGroupExecution": {
+      "channelObjectIdentifier": {
+        "instance": 1,
+        "type": "channel"
+      },
+      "channelWriteFailTimeMs": 30000,
+      "configuredChannelNumber": 1,
+      "configuredControlGroups": [
+        1
+      ],
+      "defaultLastPriority": 16,
+      "defaultPriorityChannelValue": {
+        "tag": "real",
+        "value": 45
+      },
+      "initialLastPriority": 12,
+      "listLength": 2,
+      "notes": "Channel 1 (Garnet): Channel_Number 1, Control_Groups {1}; two references, Lighting Output 1 Present_Value (local, element 1) and device 389016 Lighting Output 1 Present_Value (remote; no peer runs, so its write is skipped and Write_Status reads FAILED). Schedule 1 writes Channel 1 at priority 12 from start-up (a demo exception event), so Last_Priority reads 12 before any client write, not 16. Channel Write Fail Time 30 s (the EPICS). Writes at priority 9 are above the Schedule, so they show in Lighting Output 1 Present_Value.",
+      "propagatedValue": {
+        "tag": "real",
+        "value": 40
+      },
+      "targetObjectIdentifier": {
+        "instance": 1,
+        "type": "lightingOutput"
+      },
+      "targetPropertyIdentifier": "presentValue",
+      "targetReferenceValue": {
+        "tag": "constructed",
+        "value": [
+          {
+            "tag": "objectIdentifier",
+            "value": {
+              "instance": 1,
+              "type": "lightingOutput"
+            }
+          },
+          {
+            "tag": "unsignedInt",
+            "value": 85
+          }
+        ]
+      },
+      "writePriority": 9
+    }
+  }
+}

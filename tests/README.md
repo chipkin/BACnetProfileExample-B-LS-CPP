@@ -11,7 +11,7 @@ Python-simulated Peers - never another example's binary. Two scripts:
   finds a device and reads everything it says it has.
 
 The tests are written against the series' shared harness in
-[`../wiretest/`](../wiretest/README.md) (0.6.0, vendored like `common/`): the
+[`../wiretest/`](../wiretest/README.md) (0.7.0, vendored like `common/`): the
 WriteGroup-Request encoder, the WriteProperty request parser and the Peer
 (`wiretest.SimulatedServer`, a Python device whose objects take WriteProperty and
 which a test can take offline or make refuse writes) all come from there. Python 3
@@ -26,9 +26,10 @@ python3 tests/run_wire_tests.py --exe build/BACnetExampleBLS
 ```
 
 On Windows, `--exe build\Release\BACnetExampleBLS.exe`. It ends with
-`ALL WIRE TESTS PASSED` (exit 0) or the scripts that failed, in about 30 seconds: one
-step waits for the stack to give up on an offline device (APDU_Timeout, 10 s).
-`--port` (default 47821) is the UDP port the test starts the example on; pick another if
+`ALL WIRE TESTS PASSED` (exit 0) or the scripts that failed, in about a minute and a
+half: one step waits for the stack to give up on an offline device (APDU_Timeout x
+(Number_Of_APDU_Retries + 1), read from the example: 40 s at the stack's defaults).
+`--port` (default 47840) is the UDP port the test starts the example on; pick another if
 something else on the host has it. CI (`.github/workflows/release.yml`) runs it on Linux
 after the smoke test.
 
@@ -61,31 +62,68 @@ of the example first reads its broadcast address from its console.
 1. **Binding.** The Who-Is the stack's Device_Address_Binding sends for device 389016
    reaches the subnet broadcast (Linux/macOS), the Peer answers, and the Device's
    `Device_Address_Binding` lists 389016.
-2. **Start-up.** Channel 1 `Write_Status` is IDLE (cl. 12.53.7); Schedule 1's
-   `List_Of_Object_Property_References` names Channel 1 `Present_Value`, no array index
-   (a Channel has no Priority_Array, Table 12-62); Schedule 1 has written it: Channel 1
-   `Present_Value` 100.0, `Last_Priority` 12.
+2. **Start-up.** Schedule 1's `List_Of_Object_Property_References` names Channel 1
+   `Present_Value`, no array index (a Channel has no Priority_Array, Table 12-62);
+   Schedule 1 has written it: Channel 1 `Present_Value` 100.0, `Last_Priority` 12, and
+   the Channel has forwarded it to Jade (`Priority_Array[12]` 100.0, cl. 12.53.5).
+   `Write_Status` follows that write (cl. 12.53.7): FAILED when device 389016 could not
+   be addressed yet - the Schedule writes on the example's first tick, before 389016's
+   I-Am binds it, and the stack skips a member it cannot address - and SUCCESSFUL if it
+   could; the example's console says which.
 3. **The Profile Function.** WriteGroup group 1, channel 1, 60.0, priority 8: the Peer
    receives WriteProperty Lighting Output 1 `Present_Value` 60.0 at priority 8; Jade is
    60.0; Channel 1 is 60.0 with `Last_Priority` 8; `Write_Status` SUCCESSFUL.
 4. **Failure Mode - the remote member is offline** (the Peer answers nothing at all).
    A WriteGroup of 30.0 still writes Jade; `Write_Status` is IN_PROGRESS; a WriteProperty
-   of Channel 1 `Present_Value` meanwhile gets Error Code BUSY (cl. 12.53.5); after the
+   of Channel 1 `Present_Value` meanwhile gets Error Class OBJECT, Error Code BUSY
+   (cl. 12.53.5); after the
    stack's timeout `Write_Status` is FAILED; the Peer did receive the WriteProperty.
    **Recovery:** the Peer back online, WriteGroup 80.0 reaches it and `Write_Status` is
    SUCCESSFUL.
 5. **Failure Mode - a member refuses.** The Peer answers Error: FAILED. Jade refuses
    150 % (out of range): FAILED, Jade keeps its level. A valid WriteGroup afterwards:
    SUCCESSFUL.
-6. A WriteProperty of Channel 1 `Present_Value` (not in progress) is accepted.
+6. **A WriteProperty is forwarded too.** WriteProperty Channel 1 `Present_Value` 42.0 at
+   priority 9 is accepted, reaches Jade's `Priority_Array[9]` and the Peer, and
+   `Write_Status` ends SUCCESSFUL; a WriteProperty of 43.0 that the Peer refuses ends
+   FAILED (a check that fails on a build that follows only a WriteGroup's fan-out).
 
-`[KNOWN GAP]` lines (TODO.md 1 and 2): Schedule 1's write does not reach Jade or the
-Peer; a WriteProperty to Channel 1 does not reach Jade's `Priority_Array[9]` or the
-Peer; BUSY goes out with Error Class PROPERTY, not OBJECT.
+7. **DeviceCommunicationControl DISABLE_INITIATION** (cl. 16.1): a WriteProperty to
+   Channel 1 is accepted, the Peer receives nothing, and `Write_Status` ends FAILED
+   (the stack reports nothing for a write it refuses to send, so the example fails the
+   remote member itself); after ENABLE the next write is accepted (not BUSY), reaches
+   the Peer and ends SUCCESSFUL.
+
+No `[KNOWN GAP]` lines remain: the stack defects they reported (a WriteProperty or
+Schedule write not forwarded, BUSY sent with Error Class PROPERTY) are fixed at the
+current Stack Pin (TODO.md "Fixed upstream").
 
 A WriteGroup is unconfirmed, so the test watches the example's console for the line
 that says it arrived and sends it once more, with a `[RETRY]` line, if it does not
 appear in 2 s. Every check reads its result over the wire.
+
+## The Lighting Output tests - Jade carries out Lighting_Command (DS-LO-B, cl. 12.54)
+
+`fade_test.py`, `ramp_step_test.py`, `stop_priority_test.py`, `warn_test.py` and
+`refusal_test.py` are the B-LD example's Lighting Output Wire Tests, aimed at Jade: this
+example runs the same Lighting Output engine (`main.cpp` section 1b). Their shared
+`lighting_setup.py` starts the example and relinquishes Schedule 1's start-up write to
+Jade (100 % at priority 12, through Channel 1), so each test starts with the light off
+and idle, as on B-LD.
+
+- `fade_test.py`: a `fadeTo` fades over its fade time (or `Default_Fade_Time`):
+  `Present_Value` is the target at once, `Tracking_Value` moves in proportion,
+  `In_Progress` is `fadeActive` until it arrives.
+- `ramp_step_test.py`: `rampTo` at its ramp rate (or `Default_Ramp_Rate`); `stepUp`,
+  `stepDown`, `stepOn`, `stepOff` from `Tracking_Value`, ignored when the light is off.
+- `stop_priority_test.py`: `stop` holds the level; a higher-priority write halts a fade,
+  a lower one does not.
+- `warn_test.py`: `warn`, `warnOff`, `warnRelinquish` and their egress time
+  (`Egress_Active`); the `Present_Value` special values -1.0 to -7.0.
+- `refusal_test.py`: `NONE`, out-of-range fields, a `fadeTo` without a target level and
+  an out-of-range `Present_Value` are refused with VALUE_OUT_OF_RANGE and change
+  nothing (part 1 of B-LD's `failure_test.py`; B-LS has no lamp Simulation for parts 2
+  and 3).
 
 ## `discovery_test.py` - every listed property reads as a value
 
@@ -105,8 +143,37 @@ appear in 2 s. Every check reads its result over the wire.
    three reads Explorer 4.23.2.0 found failing at stack 6.0.21 (reported against
    B-SS-CPP as #20, #21, #22; every example in the series serves the same
    Network Port).
+5. The Device's **`Description`** reads as its text, not an empty string. The
+   stack holds at most 255 octets from a callback and refuses a longer value,
+   which then reads as `""` - a value the walk in 3 still counts as read. The
+   270-character description of 1.2.0 failed this check; it is 221 now.
+
+## `configuration_test.py` - the Device's identity is configurable
+
+BACnet requires the Device's Object_Identifier and Object_Name to be
+configurable (135-2024 cl. 12.1.1.3, 12.1.1.4); Object_Name must be unique
+across the internetwork, so two units cannot share a compile-time name. The
+supervisor is started several ways, and its help is checked:
+
+1. **No options (control):** Device 389017 answers Who-Is, and its
+   `Object_Name` is the default `Chipkin Example B-LS`.
+2. **`--deviceID 389917 --deviceName "Chipkin Example B-LS Unit 2"`:** the
+   device answers Who-Is as 389917; `Object_Name` reads the configured name;
+   a read of Device 389017 gets Error OBJECT / UNKNOWN_OBJECT; the ready line
+   names the configured device; a Who-Has by the configured name gets an
+   I-Have from Device 389917 with that name (DM-DOB-B); a WriteProperty of
+   the Device's `Object_Name` is refused and changes nothing.
+3. **Boundaries:** an empty name and a 256-byte name each print a warning and
+   keep the default; a 255-byte name (the limit) reads back whole.
+4. **`--help`** lists `--port`, `--deviceID`, `--deviceName` and `--xml`, and
+   not `--dcc-password` (the DeviceCommunicationControl password is a source
+   constant); with `--xml` each frame prints as an XML block.
 
 ## Results
+
+Run 2026-10-26, stack `6.x` @ `69b6249f`, Windows 11, SOURCE build (VS 18): discovery
+19/19, configuration 20/20, fade 31/31, ramp_step 24/24, stop_priority 19/19, warn 23/23,
+refusal 21/21, channel_fanout 29/29 - ALL WIRE TESTS PASSED. The earlier record follows.
 
 Run 2026-10-15, stack `6.x` @ `64b2cfac5` (6.0.23), example v1.2.0, `common/` 3.4.0,
 three runs in a row on each platform:
@@ -120,7 +187,7 @@ Windows has one check fewer: the Peer cannot hear the broadcast Who-Is there.
 
 With the series' standard STATIC library (built without `STACK_OPTION_WRITE_GROUP`)
 the example does not start - `Error: Failed to enable the WriteGroup service.` - and
-the test fails at "did not reach 'ready'". See TODO.md 3.
+the test fails at "did not reach 'ready'". See TODO.md 1.
 
 ## Each check fails without what it checks
 

@@ -6,46 +6,10 @@ the Wire Tests see is reported as a `[KNOWN GAP]` line by
 as a failure. When one prints `[GAP CLOSED]` instead, the defect is fixed upstream -
 turn its check into a counted one and delete the entry here.
 
-Checked at stack `6.x` @ `64b2cfac5` (6.0.23), 2026-10-15. Re-verify every entry
+Checked at stack `6.x` @ `69b6249f` (6.0.23), 2026-10-27. Re-verify every entry
 whenever the Stack Pin moves.
 
-## 1. A WriteProperty or a Schedule write to a Channel is not propagated to its members
-
-- **Where:** the CAS BACnet Stack -
-  [chipkin/cas-bacnet-stack#3956](https://github.com/chipkin/cas-bacnet-stack/issues/3956).
-- **What:** 135-2024 cl. 12.53.5: "When Present_Value is written, the Channel object
-  shall propagate that value to each of the members in the
-  List_Of_Object_Property_References except those members containing an empty
-  reference." The stack propagates only from its WriteGroup processor. A client's
-  WriteProperty of Channel 1 Present_Value = 42.0 @ 9 is answered SimpleACK and
-  Channel 1 holds it, but neither Jade nor device 389016 is written. Schedule 1's
-  write (100.0 @ 12, at start-up) stops at Channel 1 the same way.
-- **Effect here:** the WriteGroup fan-out - the Profile Function - works. L.11.1's
-  "Ability to schedule output actions, both in the local device and in other devices"
-  cannot go through the Channel: the Schedule drives Channel 1 and nothing further.
-  Write_Status is left as it was after such a write, because nothing was forwarded.
-- **Wire Test:** four `[KNOWN GAP]` lines - "Schedule 1's write to Channel 1 reaches
-  Jade (100.0)", "... reaches device 389016 (100.0 @ 12)", "WriteProperty to Channel 1
-  (42.0 @ 9) reaches Jade's Priority_Array[9]", "... reaches device 389016".
-
-## 2. Error Code BUSY goes out with Error Class PROPERTY, not OBJECT
-
-- **Where:** the CAS BACnet Stack - already tracked as [#3088](https://github.com/chipkin/cas-bacnet-stack/issues/3088) item CR2-F01-031 (this
-  example's evidence added as a comment).
-  `source/BACnetBusinessLogic.cpp` `GetErrorClassForCallbackErrorCode()`: a Set
-  callback can only name an error code, and the stack picks the class; `busy` (82)
-  falls to `default: return BACnetErrorClass::property`.
-- **What:** 135-2024 cl. 12.53.5: "Attempts to write to Present_Value using
-  WriteProperty service when Write_Status is IN_PROGRESS shall cause a Result(-) to be
-  returned with an 'Error Class' of OBJECT and an 'Error Code' of BUSY." Cl. 18.2
-  ("Error Class - OBJECT") lists BUSY. `SetPropertyReal` / `SetPropertyNull` refuse the
-  write with `ERROR_CODE_BUSY`; the wire shows `Error class=2 code=82`.
-- **Effect here:** the write is refused while a fan-out is in progress, as the clause
-  requires; only the class a client sees is wrong.
-- **Wire Test:** `[KNOWN GAP] ... and with Error Class OBJECT (cl. 12.53.5; BUSY is an
-  OBJECT code, cl. 18.2)`. The code itself is a counted check.
-
-## 3. The default preset does not compile WriteGroup (worked around)
+## 1. The default preset does not compile WriteGroup (worked around)
 
 - **Where:** [chipkin/cas-bacnet-stack#3954](https://github.com/chipkin/cas-bacnet-stack/issues/3954).
 - **What:** `CASBACnetStackOptions.h` says `STACK_OPTION_TARGET_FULL` "Enables ALL
@@ -59,7 +23,7 @@ whenever the Stack Pin moves.
   tools/build-stack-static.sh BACnetProfileExample-B-LS-CPP` (`-D`, not `/D`: Git Bash
   rewrites `/D...` into a path).
 
-## 4. A Channel's Present_Value write reaches the application in two shapes (worked around)
+## 2. A Channel's Present_Value write reaches the application in two shapes (worked around)
 
 - **Where:** [chipkin/cas-bacnet-stack#3955](https://github.com/chipkin/cas-bacnet-stack/issues/3955).
 - **What:** `BACnetStack_AddChannelObject`'s doc says the Set callbacks for a Channel's
@@ -68,6 +32,34 @@ whenever the Stack Pin moves.
   references Present_Value) the Schedule all arrive as `Present_Value (85)` with the
   `priority` argument instead.
 - **Done here:** `SetPropertyReal` and `SetPropertyNull` accept both shapes.
+
+## 3. A member write the stack refuses to send reaches no hook (worked around)
+
+- **Where:** [chipkin/cas-bacnet-stack#4603](https://github.com/chipkin/cas-bacnet-stack/issues/4603).
+- **What:** under DeviceCommunicationControl DISABLE_INITIATION the stack drops the
+  Channel's WriteProperty to device 389016 (correctly, cl. 16.1) but calls no SimpleACK
+  / Error / Reject / Abort / Timeout hook for it, so an application that keeps
+  `Write_Status` from those hooks never sees the write end.
+- **Done here:** the DeviceCommunicationControl callback records DISABLE_INITIATION and
+  its duration; `BeginChannelFanOut` fails the remote member at once while it holds
+  (`main.cpp` section 2e). `tests/channel_fanout_test.py` section 7.
+
+## Fixed upstream
+
+- **A WriteProperty or a Schedule write to a Channel is propagated to its members**
+  ([chipkin/cas-bacnet-stack#3956](https://github.com/chipkin/cas-bacnet-stack/issues/3956),
+  fixed by the `6.x` @ `4238a39f` Stack Pin). 135-2024 cl. 12.53.5: "When
+  Present_Value is written, the Channel object shall propagate that value to each of
+  the members". Schedule 1's write and a client's WriteProperty now reach Jade and
+  device 389016 like a WriteGroup; `Write_Status` follows every one of them
+  (`main.cpp` section 2e), and the Wire Test's former `[KNOWN GAP]` lines are counted
+  checks. Schedule 1's start-up write cannot reach device 389016: it is made on the
+  first tick, before 389016's I-Am binds it, and the stack skips a member it cannot
+  address, so `Write_Status` reads FAILED until the next write that reaches both
+  members.
+- **Error Code BUSY goes out with Error Class OBJECT**
+  ([#3088](https://github.com/chipkin/cas-bacnet-stack/issues/3088) item CR2-F01-031,
+  fixed by the same pin; cl. 12.53.5, cl. 18.2). A counted check now.
 
 ## Fixed here
 
@@ -85,7 +77,8 @@ whenever the Stack Pin moves.
   (Table 12-62). It references `Present_Value` now, written at Priority_For_Writing 12.
 - **Write_Status was a constant `1`** (which is IN_PROGRESS, not SUCCESSFUL as the old
   comment said; source/BACnetWriteStatus.h: idle 0, inProgress 1, successful 2,
-  failed 3). It is IDLE at start-up and follows each fan-out (main.cpp section 2e).
+  failed 3). It is IDLE until the first write to Channel 1 and follows each fan-out (main.cpp
+  section 2e).
 - **Last_Priority started at 0**; cl. 12.53.6 says 16.
 
 ## Open, not stack-owned
@@ -103,9 +96,8 @@ whenever the Stack Pin moves.
 - **A Schedule write during IN_PROGRESS is refused too.** The Set callback cannot tell
   Schedule 1's write from a client's WriteProperty (both arrive as Present_Value with
   a priority), so a Schedule transition that lands while a fan-out waits for the
-  remote member (up to 10 s) gets the same BUSY refusal (not checked whether the
-  stack's Schedule engine writes it again later). Rare (09:00 / 17:00), and moot while the stack does not forward a
-  Schedule write anyway (1).
+  remote member (up to 40 s) gets the same BUSY refusal (not checked whether the
+  stack's Schedule engine writes it again later). Rare (09:00 / 17:00).
 - **`'s'` does nothing**: `main()` has no `case` for `KeyCommand::DemoAdvance`.
 - **Calendar 1 ("Cream")** is added with plain `BACnetStack_AddObject`, so its
   `Date_List` is empty and `Present_Value` is `false`. Stack #2034 and #963 are closed:
@@ -117,3 +109,17 @@ whenever the Stack Pin moves.
   prose names "(channel number, overridingPriority, value)" tuples and the stack (and
   `wiretest/codec.py` `write_group_request`) encode channel [0], overriding-priority [1], then the
   untagged value. Needs a look at the printed standard.
+
+## Conformance rows that stay open (customers quoting support)
+
+- **Channel 1's `Last_Priority` reads 12 where a BTL script expects 16.** Schedule 1
+  writes Channel 1 at Priority_For_Writing 12, so `Last_Priority` reads 12 after a
+  Schedule write; the BTL test 7.3.2.34.1 verifies 16 after its own WriteGroup. The
+  test result is treated as a script limit, not an example defect.
+  (ref: `chipkin/chipkin-bacnet-testing-tool#692`)
+- **Schedule and Calendar scenarios that need the test harness to configure the
+  Schedule are not run** (SCHED-E-B). (ref: `chipkin/chipkin-bacnet-testing-tool#595`)
+- **IUT-initiated WriteProperty tests (DS-WP-A, DS-ALO-A) are not run**: they need
+  a test harness that plays the remote device. (ref: `chipkin/chipkin-bacnet-testing-tool#691`)
+- **DM-DCC-B disable-initiation checks are skipped**; this device initiates the
+  Channel's WriteProperty. (ref: `chipkin/chipkin-bacnet-testing-tool#355`)

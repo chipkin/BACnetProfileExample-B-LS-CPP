@@ -13,8 +13,14 @@ owns one UDP socket and, in a background thread:
   - hands every other answer (SimpleACK / ComplexACK / Error / Reject / Abort) to the
     request waiting for its invoke id.
 
-`request()` / `read_property()` / `write_property()` work as wiretest.Client's do, and
-return the same wiretest.Answer. Came from B-AAC's tests/workstation.py (wiretest 0.6.0).
+`request()` / `read_property()` / `write_property()` / `read_property_multiple()` /
+`device_communication_control()` work as wiretest.Client's do, and return the same
+wiretest.Answer. `retries=` and `timeout=` work as Client's too (0.7.0, from B-AEC's
+RetryingWorkstation and B-LSC's request_with_retry): an unanswered request is sent again
+with the SAME invoke id, with a visible [RETRY] line. `announce()` sends an I-Am for a
+device instance the workstation plays, unicast, so a device whose Recipient_List names that
+instance can bind the workstation's address (0.7.0, B-LSC). Came from B-AAC's
+tests/workstation.py (wiretest 0.6.0).
 """
 import select
 import socket
@@ -22,17 +28,20 @@ import threading
 import time
 
 from . import alarm, codec
-from .client import Answer
+from .client import DEFAULT_TIMEOUT, Answer, ConfirmedServices, send_with_retries  # noqa: F401 (Answer: 0.6.0 name)
 
 RESPONSE_TYPES = (codec.PDU_SIMPLE_ACK, codec.PDU_COMPLEX_ACK, codec.PDU_ERROR, codec.PDU_REJECT, codec.PDU_ABORT)
 
 
-class Workstation:
-    def __init__(self, bind_ip="127.0.0.1", port=0, answer_notifications=True):
+class Workstation(ConfirmedServices):
+    def __init__(self, bind_ip="127.0.0.1", port=0, answer_notifications=True, retries=0,
+                 timeout=DEFAULT_TIMEOUT):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.bind((bind_ip, port))
         self.ip, self.port = self.sock.getsockname()
         self.answer_notifications = answer_notifications
+        self.retries = retries
+        self.timeout = timeout
         self.notifications = []      # every EventNotification received, in order (alarm.EventNotification)
         self._responses = []
         self._invoke_id = 0
@@ -108,32 +117,34 @@ class Workstation:
 
     # -- requesting ----------------------------------------------------------
 
-    def request(self, build_apdu, port, ip="127.0.0.1", timeout=3.0):
+    def request(self, build_apdu, port, ip="127.0.0.1", timeout=None):
         with self._lock:
             self._invoke_id = (self._invoke_id + 1) % 256
             invoke_id = self._invoke_id
             self._responses = [frame for frame in self._responses if frame.invoke_id != invoke_id]
-        self.sock.sendto(codec.bvlc(codec.npdu(build_apdu(invoke_id), expecting_reply=True)), (ip, port))
-        deadline = time.monotonic() + timeout
-        with self._arrived:
-            while True:
-                for frame in self._responses:
-                    if frame.invoke_id == invoke_id:
-                        self._responses.remove(frame)
-                        return Answer(frame)
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return Answer(None)
-                self._arrived.wait(remaining)
+        octets = codec.bvlc(codec.npdu(build_apdu(invoke_id), expecting_reply=True))
+
+        def attempt(seconds):
+            self.sock.sendto(octets, (ip, port))
+            deadline = time.monotonic() + seconds
+            with self._arrived:
+                while True:
+                    for frame in self._responses:
+                        if frame.invoke_id == invoke_id:
+                            self._responses.remove(frame)
+                            return frame
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return None
+                    self._arrived.wait(remaining)
+        return send_with_retries(invoke_id, attempt, self.retries, self.timeout if timeout is None else timeout)
 
     def send_unconfirmed(self, apdu, port, ip="127.0.0.1"):
         self.sock.sendto(codec.bvlc(codec.npdu(apdu)), (ip, port))
 
-    def read_property(self, port, object_type, instance, property_identifier, array_index=None):
-        return self.request(lambda invoke_id: codec.read_property_request(
-            invoke_id, object_type, instance, property_identifier, array_index), port)
-
-    def write_property(self, port, object_type, instance, property_identifier, value_octets,
-                       priority=None, array_index=None):
-        return self.request(lambda invoke_id: codec.write_property_request(
-            invoke_id, object_type, instance, property_identifier, value_octets, priority, array_index), port)
+    def announce(self, device_instance, port, ip="127.0.0.1", vendor_identifier=389):
+        """Send an I-Am for `device_instance` from this workstation's socket to one device. A
+        device whose Recipient_List names `device_instance` learns the workstation's address
+        from it - the way a workstation's start-up I-Am reaches a panel, without relying on
+        broadcasts (which do not reach a 127.0.0.1 socket)."""
+        self.send_unconfirmed(codec.i_am(device_instance, vendor_identifier), port, ip)

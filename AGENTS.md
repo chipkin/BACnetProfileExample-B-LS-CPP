@@ -56,8 +56,8 @@ commands above.
 ## Run
 
 ```bash
-./build/BACnetExampleBLS [--port 47808] [--deviceID 389017]   # Linux/macOS
-.\build\Release\BACnetExampleBLS.exe [--port 47808] [--deviceID 389017]   # Windows
+./build/BACnetExampleBLS [--port 47808] [--deviceID 389017] [--deviceName "Chipkin Example B-LS"]   # Linux/macOS
+.\build\Release\BACnetExampleBLS.exe [--port 47808] [--deviceID 389017] [--deviceName "Chipkin Example B-LS"]   # Windows
 ```
 
 Interactive keys: `h` help, `q` quit, up/down nudge Analog Input 1, `w` fire a
@@ -71,7 +71,7 @@ Schedule's demo exception event fires on its own by wall clock regardless. See
 
 This example **requires** a stack with the Channel/Schedule engine and the
 Device_Address_Binding (DAB) resolver, present at the pinned commit
-(`submodules/cas-bacnet-stack` @ `64b2cfac5`, `6.x`, 6.0.23). It does **not**
+(`submodules/cas-bacnet-stack` @ `69b6249f`, `6.x`, 6.0.23). It does **not**
 register `RegisterCallbackChannelSendWritePropertyToRemote` or
 `RegisterCallbackScheduleSendWritePropertyToRemote` - **verify before assuming
 they exist**: at this pin they were removed (see the "Sprint 82" comment in
@@ -140,8 +140,8 @@ start-up. Beyond the Wire Tests, verification is behavioural:
 5. Confirm the Schedule writes Channel 1 at start-up (its demo exception covers
    today from 00:00:05) - this one is easy to observe without a second
    instance or an external client, and does not depend on the `'s'` key (see
-   the Conventions note above). At this pin the write is not propagated to
-   Jade: a stack defect (TODO.md).
+   the Conventions note above). The Channel forwards it to Jade (100 % at
+   priority 12); device 389016 is not known yet, so `Write_Status` reads FAILED.
 6. Confirm services that are not enabled (e.g. ReadPropertyMultiple, SubscribeCOV)
    are rejected.
 7. If you changed the objects or their properties, regenerate `docs/PICS.md`

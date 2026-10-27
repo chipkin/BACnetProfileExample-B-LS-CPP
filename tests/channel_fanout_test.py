@@ -3,7 +3,7 @@
 # Public-domain example code (CC0) - see ../LICENSE.
 """B-LS Profile Function: Channel 1 forwards a WriteGroup to a local light AND another device.
 
-    python3 tests/channel_fanout_test.py [--exe build/BACnetExampleBLS] [--port 47821]
+    python3 tests/channel_fanout_test.py [--exe build/BACnetExampleBLS] [--port 47840]
 
 135-2024 L.11.1: "A B-LS is any device that implements Channel objects and optionally
 Lighting Output and/or Binary Lighting Output objects with the ability to forward channel
@@ -16,20 +16,29 @@ The Peer is a Python BACnet/IP device standing in for remote device 389016, a li
      reaches the subnet broadcast (Linux/macOS, where a test can hear a broadcast), the
      Peer answers, and Device_Address_Binding lists 389016. On Windows the Peer announces
      itself with an I-Am instead.
-  2. Start-up: Write_Status IDLE; Schedule 1 references Channel 1's Present_Value and has
-     written it (100.0 at priority 12).
+  2. Start-up: Schedule 1 references Channel 1's Present_Value and has written it (100.0
+     at priority 12); the Channel has propagated it to Jade, and Write_Status records how
+     that write went: FAILED when device 389016 could not be addressed yet (the Schedule
+     writes on the example's first tick, before 389016's I-Am binds it, and the stack
+     skips a member it cannot address - cl. 12.53.7), SUCCESSFUL if it could.
   3. Profile Function: a WriteGroup (group 1, channel 1, 60.0, priority 8) reaches BOTH
      members - Jade (local) and the Peer's Lighting Output 1 as a WriteProperty at
      priority 8 - and Write_Status ends SUCCESSFUL.
   4. Failure Mode (cl. 12.53.5 / 12.53.7): the Peer goes offline. A WriteGroup still writes
      Jade, Write_Status is IN_PROGRESS while the stack waits for the Peer (a WriteProperty
-     of Present_Value meanwhile is refused with OBJECT / BUSY), then FAILED when the
+     of Present_Value meanwhile is refused with Error Class OBJECT, Error Code BUSY), then
+     FAILED when the
      Peer's write times out. The Peer comes back: the next WriteGroup reaches it and
      Write_Status is SUCCESSFUL again.
   5. Failure Mode: the Peer refuses the write (Error) -> FAILED; Jade refuses the value
      (150 % is out of range) -> FAILED.
-  6. [KNOWN GAP] lines (stack defects, TODO.md): a WriteProperty or Schedule write to
-     Channel 1 is not propagated to its members.
+  6. A WriteProperty to Channel 1 (42.0 at priority 9) is propagated too (cl. 12.53.5):
+     it reaches Jade's Priority_Array[9] and the Peer, and Write_Status ends SUCCESSFUL;
+     one the Peer refuses (43.0) ends FAILED.
+  7. DeviceCommunicationControl DISABLE_INITIATION (DM-DCC-B, cl. 16.1): a WriteProperty to
+     Channel 1 still writes the Channel, the device does not send the Peer its write, and
+     Write_Status ends FAILED (the stack reports nothing for a write it refuses to send);
+     after ENABLE the next write reaches the Peer and ends SUCCESSFUL, not BUSY.
 
 Exit code 0 = every check passed.
 """
@@ -43,7 +52,7 @@ REPOSITORY = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPOSITORY))
 
 import wiretest  # noqa: E402  (the vendored harness at the repository root)
-from wiretest import codec, known_gap, record, summary  # noqa: E402
+from wiretest import alarm, codec, record, summary  # noqa: E402
 
 # Match main.cpp.
 DEVICE_INSTANCE = 389017
@@ -65,19 +74,22 @@ WRITE_STATUS_NAMES = {0: "idle", 1: "in-progress", 2: "successful", 3: "failed"}
 REMOTE_DEVICE_INSTANCE = 389016
 REMOTE_LIGHT = (OBJECT_TYPE_LIGHTING_OUTPUT, 1)
 
-# The stack's defaults: APDU_Timeout 10 s, Number_Of_APDU_Retries 0.
-REMOTE_TIMEOUT_SECONDS = 10 + 5
+# The stack gives up on an offline member after APDU_Timeout x (Number_Of_APDU_Retries + 1):
+# the test reads both from the example (stack defaults: 10 s x (3 + 1) = 40 s)
+# and allows this much more.
+REMOTE_TIMEOUT_MARGIN_SECONDS = 5
+PROPERTY_APDU_TIMEOUT = 11
+PROPERTY_NUMBER_OF_APDU_RETRIES = 73
 # How long to wait for Write_Status to settle after a WriteGroup whose members answer at once:
 # long enough for one of this test's own ReadProperty requests to need its retry (2 x 3 s).
 SETTLE_SECONDS = 8
 
-FANOUT_DEFECT = "stack #3956: a WriteProperty or Schedule write to a Channel is not propagated (cl. 12.53.5)"
 
 
 def main():
     arguments = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     arguments.add_argument("--exe", default=str(wiretest.default_exe(REPOSITORY, "BACnetExampleBLS")))
-    arguments.add_argument("--port", type=int, default=47821, help="the lighting supervisor's UDP port (default 47821)")
+    arguments.add_argument("--port", type=int, default=47840, help="the lighting supervisor's UDP port (default 47840)")
     args = arguments.parse_args()
     hears_broadcasts = os.name != "nt"   # wiretest.broadcast_listener needs POSIX SO_REUSEADDR
 
@@ -165,6 +177,16 @@ def remote_write(peer, value, priority, seconds=3.0):
     return wait_for(found, seconds)
 
 
+def remote_timeout_seconds(client, args):
+    """How long the stack waits for an offline member: APDU_Timeout x (Number_Of_APDU_Retries + 1), plus a margin."""
+    device = (codec.OBJECT_TYPE_DEVICE, DEVICE_INSTANCE)
+    apdu_timeout_ms = read_value(client, args, device, PROPERTY_APDU_TIMEOUT)
+    retries = read_value(client, args, device, PROPERTY_NUMBER_OF_APDU_RETRIES)
+    if not isinstance(apdu_timeout_ms, int) or not isinstance(retries, int):
+        apdu_timeout_ms, retries = 10000, 3   # the stack defaults, if either read fails
+    return apdu_timeout_ms / 1000.0 * (retries + 1) + REMOTE_TIMEOUT_MARGIN_SECONDS
+
+
 def is_close(value, expected):
     return isinstance(value, float) and abs(value - expected) < 0.001
 
@@ -187,8 +209,14 @@ def run(args, example, peer, client, hears_broadcasts):
            binding.describe() if not listed else "")
 
     # --- 2. Start-up state ---------------------------------------------------------
-    record("Channel 1 Write_Status is IDLE at start-up (cl. 12.53.7)", write_status(client, args) == WRITE_STATUS_IDLE,
-           WRITE_STATUS_NAMES.get(write_status(client, args), "unreadable"))
+    # Schedule 1 writes Channel 1 on the example's first tick. Whether device 389016 had been
+    # bound by then decides the outcome; the example's console says which (section 2e).
+    skipped = "cannot address it" in example.output()
+    expected = WRITE_STATUS_FAILED if skipped else WRITE_STATUS_SUCCESSFUL
+    seen, status = wait_write_status(client, args, expected, SETTLE_SECONDS)
+    record(f"Channel 1 Write_Status follows Schedule 1's start-up write: {WRITE_STATUS_NAMES[expected]} "
+           f"({'389016 was not bound yet, so its write was skipped' if skipped else 'both members took it'}; "
+           "cl. 12.53.7)", seen, status)
     references = read(client, args, SCHEDULE, codec.PROPERTY_LIST_OF_OBJECT_PROPERTY_REFERENCES)
     reference_fields = dict(codec.context_values(references.value_octets or b""))
     referenced = (reference_fields.get(0) == codec.object_id(*CHANNEL) and
@@ -201,11 +229,9 @@ def run(args, example, peer, client, hears_broadcasts):
     record("Schedule 1 has written Channel 1: Present_Value 100.0, Last_Priority 12",
            is_close(channel_value, 100.0) and last_priority == SCHEDULE_PRIORITY,
            f"Present_Value={channel_value!r} Last_Priority={last_priority!r}")
-    jade_value = read_value(client, args, JADE, codec.PROPERTY_PRESENT_VALUE)
-    known_gap("Schedule 1's write to Channel 1 reaches Jade (100.0)", is_close(jade_value, 100.0),
-              f"{FANOUT_DEFECT}; Jade={jade_value!r}")
-    known_gap("Schedule 1's write to Channel 1 reaches device 389016 (100.0 @ 12)",
-              remote_write(peer, 100.0, SCHEDULE_PRIORITY, 0.5) is not None, FANOUT_DEFECT)
+    jade_slot = read(client, args, JADE, codec.PROPERTY_PRIORITY_ARRAY, SCHEDULE_PRIORITY).value
+    record("Schedule 1's write to Channel 1 reaches Jade: Priority_Array[12] 100.0 (cl. 12.53.5)",
+           is_close(jade_slot, 100.0), f"Jade Priority_Array[12]={jade_slot!r}")
 
     # --- 3. The Profile Function: one WriteGroup, both members ----------------------
     send_write_group(client, args, example, 60.0)
@@ -236,11 +262,9 @@ def run(args, example, peer, client, hears_broadcasts):
                                  codec.application_real(42.0), priority=9)
     record("A WriteProperty of Channel 1 Present_Value meanwhile is refused with Error Code BUSY (cl. 12.53.5)",
            busy.error is not None and busy.error[1] == codec.ERROR_CODE_BUSY, busy.describe())
-    known_gap("... and with Error Class OBJECT (cl. 12.53.5; BUSY is an OBJECT code, cl. 18.2)",
-              busy.error is not None and busy.error[0] == codec.ERROR_CLASS_OBJECT,
-              "stack #3088 (CR2-F01-031): a Set callback names only the error code, and "
-              "GetErrorClassForCallbackErrorCode sends BUSY as class PROPERTY; " + busy.describe())
-    seen, status = wait_write_status(client, args, WRITE_STATUS_FAILED, REMOTE_TIMEOUT_SECONDS)
+    record("... and with Error Class OBJECT (cl. 12.53.5; BUSY is an OBJECT code, cl. 18.2)",
+           busy.error is not None and busy.error[0] == codec.ERROR_CLASS_OBJECT, busy.describe())
+    seen, status = wait_write_status(client, args, WRITE_STATUS_FAILED, remote_timeout_seconds(client, args))
     record("Write_Status is FAILED when the offline member's write times out (cl. 12.53.7)", seen, status)
     record("The stack did send the offline member its WriteProperty (30.0 @ 8)",
            remote_write(peer, 30.0, 8, 0.5) is not None)
@@ -267,17 +291,46 @@ def run(args, example, peer, client, hears_broadcasts):
     seen, status = wait_write_status(client, args, WRITE_STATUS_SUCCESSFUL, SETTLE_SECONDS)
     record("A valid WriteGroup afterwards is SUCCESSFUL again", seen, status)
 
-    # --- 6. Known gap: a WriteProperty to the Channel is not forwarded ---------------
+    # --- 6. A WriteProperty to the Channel is forwarded too (cl. 12.53.5) ------------
     written = client.write_property(args.port, CHANNEL[0], CHANNEL[1], codec.PROPERTY_PRESENT_VALUE,
                                     codec.application_real(42.0), priority=9)
     record("WriteProperty Channel 1 Present_Value 42.0 @ 9 is accepted", written.ok, written.describe())
     jade_value = read_value(client, args, JADE, codec.PROPERTY_PRESENT_VALUE)
     # Priority 9 is below the WriteGroups' 8, so Jade's Present_Value stays 70.0: look at the slot.
     jade_slot = read(client, args, JADE, codec.PROPERTY_PRIORITY_ARRAY, 9).value
-    known_gap("WriteProperty to Channel 1 (42.0 @ 9) reaches Jade's Priority_Array[9]", is_close(jade_slot, 42.0),
-              f"{FANOUT_DEFECT}; Jade Priority_Array[9]={jade_slot!r}, Present_Value={jade_value!r}")
-    known_gap("WriteProperty to Channel 1 (42.0 @ 9) reaches device 389016", remote_write(peer, 42.0, 9, 1.0) is not None,
-              FANOUT_DEFECT)
+    record("WriteProperty to Channel 1 (42.0 @ 9) reaches Jade's Priority_Array[9]", is_close(jade_slot, 42.0),
+           f"Jade Priority_Array[9]={jade_slot!r}, Present_Value={jade_value!r}")
+    record("WriteProperty to Channel 1 (42.0 @ 9) reaches device 389016", remote_write(peer, 42.0, 9) is not None)
+    seen, status = wait_write_status(client, args, WRITE_STATUS_SUCCESSFUL, SETTLE_SECONDS)
+    record("Write_Status follows the WriteProperty's propagation and ends SUCCESSFUL (cl. 12.53.7)", seen, status)
+    # A WriteProperty's propagation is followed, not only a WriteGroup's: the Peer refuses this one.
+    peer.mode = "refusing"
+    written = client.write_property(args.port, CHANNEL[0], CHANNEL[1], codec.PROPERTY_PRESENT_VALUE,
+                                    codec.application_real(43.0), priority=9)
+    seen, status = wait_write_status(client, args, WRITE_STATUS_FAILED, SETTLE_SECONDS)
+    record("A WriteProperty to Channel 1 (43.0 @ 9) that the remote member refuses: Write_Status is FAILED",
+           written.ok and seen, f"{written.describe()}; Write_Status {status}")
+    peer.mode = "online"
+
+    # --- 7. DeviceCommunicationControl DISABLE_INITIATION (cl. 16.1) ------------------
+    answer = client.device_communication_control(args.port, alarm.DCC_DISABLE_INITIATION)
+    record("DeviceCommunicationControl DISABLE_INITIATION is accepted", answer.acked, answer.describe())
+    written = client.write_property(args.port, CHANNEL[0], CHANNEL[1], codec.PROPERTY_PRESENT_VALUE,
+                                    codec.application_real(22.0), priority=9)
+    seen, status = wait_write_status(client, args, WRITE_STATUS_FAILED, SETTLE_SECONDS)
+    record("Initiation disabled: a WriteProperty to Channel 1 (22.0 @ 9) is accepted and Write_Status ends FAILED "
+           "(the remote member's write is not sent)", written.ok and seen, f"{written.describe()}; Write_Status {status}")
+    record("Initiation disabled: device 389016 receives no WriteProperty (cl. 16.1)",
+           remote_write(peer, 22.0, 9, 2.0) is None)
+    answer = client.device_communication_control(args.port, alarm.DCC_ENABLE)
+    record("DeviceCommunicationControl ENABLE is accepted", answer.acked, answer.describe())
+    written = client.write_property(args.port, CHANNEL[0], CHANNEL[1], codec.PROPERTY_PRESENT_VALUE,
+                                    codec.application_real(33.0), priority=9)
+    arrived = remote_write(peer, 33.0, 9)
+    seen, status = wait_write_status(client, args, WRITE_STATUS_SUCCESSFUL, SETTLE_SECONDS)
+    record("Re-enabled: the next WriteProperty (33.0 @ 9) is accepted (not BUSY), reaches device 389016 and "
+           "Write_Status ends SUCCESSFUL", written.ok and arrived is not None and seen,
+           f"{written.describe()}; remote write {'arrived' if arrived else 'missing'}; Write_Status {status}")
 
 
 if __name__ == "__main__":

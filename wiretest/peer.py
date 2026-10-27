@@ -61,6 +61,16 @@ class SimulatedDevice:
         with self._lock:
             return list(self.received)
 
+    def send(self, apdu, port, ip="127.0.0.1"):
+        """Send an APDU from this Peer's own socket, e.g. an event notification (0.7.0, B-OD)."""
+        self.sock.sendto(codec.bvlc(codec.npdu(apdu)), (ip, port))
+
+    def simple_acks(self, service):
+        """(invoke id, source) of every SimpleACK received for confirmed service `service` -
+        e.g. the example acknowledging a ConfirmedEventNotification this Peer sent (0.7.0, B-OD)."""
+        return [(frame.invoke_id, frame.source) for frame in self.frames()
+                if frame.ok and frame.pdu_type == codec.PDU_SIMPLE_ACK and frame.service == service]
+
     def stop(self):
         self._running = False
         self._thread.join(timeout=2)
@@ -172,15 +182,54 @@ class SimulatedServer(SimulatedDevice):
     announce(port, ip) sends an I-Am, unicast, the way a device that has just started does:
     how an example on the same host learns this Peer's address (two processes on one host
     never hear each other's broadcasts).
-    Came from B-LS's CommandablePeer and B-BC's HumidityPeer (wiretest 0.6.0)."""
+    Came from B-LS's CommandablePeer and B-BC's HumidityPeer (wiretest 0.6.0).
 
-    def __init__(self, device_instance, object_name, objects, writable=None, **keywords):
+    Options (0.7.0, from B-OD's CommandableServer) - each off unless asked for, so a 0.6.0
+    test sees the server it always did:
+      commandable=[(object_type, instance), ...]
+                   those objects' Present_Value is commanded through a real 16-slot priority
+                   array (cl. 19.2): a WriteProperty of Present_Value at priority p (16 when
+                   none is given) fills slot p, a NULL relinquishes it, and the Present_Value
+                   served is the highest-priority non-NULL slot or, with every slot NULL, the
+                   object's Relinquish_Default (its Present_Value at start). `priority_arrays`
+                   holds the slots. A server made with `commandable` also follows cl. 19.2.1
+                   for every other property: a NULL written to it is acknowledged and changes
+                   nothing.
+      array_elements=True
+                   a ReadProperty WITH an array index (cl. 15.5.1.1.3) of a listed property
+                   answers that element - [0] its length, [n] the n-th application-tagged
+                   element, past the end Error PROPERTY / INVALID_ARRAY_INDEX - instead of the
+                   whole value (0.6.0 ignored the index). `array_reads` keeps (object type,
+                   instance, property, array index) of every indexed read it answered.
+      failures     {(object_type, instance): "reject" | "abort" | "silent" | "malformed"}:
+                   every confirmed ReadProperty / WriteProperty about that object gets a Reject
+                   (unrecognized-service), an Abort (segmentation-not-supported), no answer at
+                   all (counted in `silent_requests`), or - a read - a ComplexACK whose value is
+                   a NULL of the wrong datatype. Set it at any time.
+      whole_arrays_refused
+                   {(object_type, instance, property)} whose read WITHOUT an index is Aborted
+                   (segmentation-not-supported), as a device whose list does not fit in one
+                   APDU answers. Set it at any time."""
+
+    PRIORITY_DEFAULT = 16    # cl. 15.9.1.1.5: a write without a priority uses 16
+
+    def __init__(self, device_instance, object_name, objects, writable=None, commandable=None,
+                 array_elements=False, **keywords):
         self.objects = {key: dict(properties) for key, properties in objects.items()}
         self.writable = None if writable is None else set(writable)
         self.mode = "online"
         self.read_requests = []
         self.write_requests = []
         self.requests_while_offline = 0
+        self.commandable = None if commandable is None else set(commandable)
+        self.relinquish_defaults = {key: self.objects[key][codec.PROPERTY_PRESENT_VALUE]
+                                    for key in (self.commandable or ())}
+        self.priority_arrays = {key: [None] * 16 for key in (self.commandable or ())}
+        self.array_elements = array_elements
+        self.array_reads = []
+        self.failures = {}
+        self.whole_arrays_refused = set()
+        self.silent_requests = 0
         super().__init__(device_instance, object_name, **keywords)
 
     def announce(self, port, ip="127.0.0.1", times=1, interval=0.2):
@@ -214,8 +263,28 @@ class SimulatedServer(SimulatedDevice):
 
     # -- answering ----------------------------------------------------------
 
+    def _requested_object(self, frame):
+        if frame.service == codec.SERVICE_READ_PROPERTY:
+            parsed = codec.parse_read_property_request(frame.payload)
+            return None if parsed is None else (parsed[0], parsed[1])
+        if frame.service == codec.SERVICE_WRITE_PROPERTY:
+            parsed = codec.parse_write_property_request(frame.payload)
+            return None if parsed is None else (parsed["object_type"], parsed["instance"])
+        return None
+
     def _answer(self, frame):
         confirmed = frame.pdu_type == codec.PDU_CONFIRMED_REQUEST
+        failure = None
+        if confirmed and self.mode == "online" and self.failures:
+            failure = self.failures.get(self._requested_object(frame))
+            if failure == "reject":
+                return codec.reject_pdu(frame.invoke_id, codec.REJECT_REASON_UNRECOGNIZED_SERVICE)
+            if failure == "abort":
+                return codec.abort_pdu(frame.invoke_id, codec.ABORT_REASON_SEGMENTATION_NOT_SUPPORTED)
+            if failure == "silent":
+                with self._lock:
+                    self.silent_requests += 1
+                return None
         request = None
         if confirmed and frame.service == codec.SERVICE_WRITE_PROPERTY:
             request = codec.parse_write_property_request(frame.payload)
@@ -233,9 +302,12 @@ class SimulatedServer(SimulatedDevice):
         if confirmed and frame.service == codec.SERVICE_READ_PROPERTY_MULTIPLE:
             return self._read_multiple(frame)
         if confirmed and frame.service == codec.SERVICE_READ_PROPERTY:
-            parsed = codec.parse_read_property_request(frame.payload)
+            parsed = codec.parse_read_property_request(frame.payload, with_array_index=True)
             if parsed is not None and (parsed[0], parsed[1]) in self.objects:
-                object_type, instance, property_identifier = parsed
+                special = self._read_special(frame, parsed, failure)
+                if special is not None:
+                    return special
+                object_type, instance, property_identifier, _ = parsed
                 with self._lock:
                     self.read_requests.append((codec.SERVICE_READ_PROPERTY,
                                                [(object_type, instance, [property_identifier])]))
@@ -245,6 +317,39 @@ class SimulatedServer(SimulatedDevice):
                                            codec.ERROR_CLASS_PROPERTY, codec.ERROR_CODE_UNKNOWN_PROPERTY)
                 return codec.read_property_ack(frame.invoke_id, object_type, instance, property_identifier, served)
         return super()._answer(frame)
+
+    def _read_special(self, frame, parsed, failure):
+        """A malformed answer, a refused whole array or an array element; None otherwise."""
+        object_type, instance, property_identifier, array_index = parsed
+        if failure == "malformed":
+            return codec.read_property_ack(frame.invoke_id, object_type, instance, property_identifier,
+                                           codec.application_null())
+        if array_index is None:
+            if (object_type, instance, property_identifier) in self.whole_arrays_refused:
+                with self._lock:
+                    self.read_requests.append((codec.SERVICE_READ_PROPERTY,
+                                               [(object_type, instance, [property_identifier])]))
+                return codec.abort_pdu(frame.invoke_id, codec.ABORT_REASON_SEGMENTATION_NOT_SUPPORTED)
+            return None
+        if not self.array_elements:
+            return None
+        served = self.value(object_type, instance, property_identifier)
+        if served is None:
+            return None
+        with self._lock:
+            self.read_requests.append((codec.SERVICE_READ_PROPERTY, [(object_type, instance, [property_identifier])]))
+            self.array_reads.append((object_type, instance, property_identifier, array_index))
+        elements = codec.application_elements(served)
+        if array_index == 0:
+            value = codec.application_unsigned(len(elements))
+        elif array_index <= len(elements):
+            value = elements[array_index - 1]
+        else:
+            return codec.error_pdu(frame.invoke_id, codec.SERVICE_READ_PROPERTY, codec.ERROR_CLASS_PROPERTY,
+                                   codec.ERROR_CODE_INVALID_ARRAY_INDEX)
+        return (bytes([codec.PDU_COMPLEX_ACK << 4, frame.invoke_id, codec.SERVICE_READ_PROPERTY]) +
+                codec.context_object_id(0, object_type, instance) + codec.context_unsigned(1, property_identifier) +
+                codec.context_unsigned(2, array_index) + codec.opening(3) + value + codec.closing(3))
 
     def _read_multiple(self, frame):
         specifications = codec.read_access_specifications(frame.payload[4:])
@@ -261,6 +366,16 @@ class SimulatedServer(SimulatedDevice):
         if request is None:
             return None
         key = (request["object_type"], request["instance"])
+        is_null = codec.application_tag(request["value_octets"]) == codec.TAG_NULL
+        commanded = (self.commandable is not None and key in self.commandable and
+                     request["property_identifier"] == codec.PROPERTY_PRESENT_VALUE)
+        if (self.commandable is not None and is_null and not commanded and self.mode == "online" and
+                request["property_identifier"] in self.objects.get(key, {})):
+            # cl. 19.2.1: "If an attempt is made to relinquish a non-commandable property and for
+            # which Null is not a supported datatype, if no other error conditions exist, the
+            # property shall not be changed, and the write to that property shall be considered
+            # successful."
+            return codec.simple_ack(frame.invoke_id, codec.SERVICE_WRITE_PROPERTY)
         if key not in self.objects:
             return codec.error_pdu(frame.invoke_id, codec.SERVICE_WRITE_PROPERTY,
                                    codec.ERROR_CLASS_OBJECT, codec.ERROR_CODE_UNKNOWN_OBJECT)
@@ -274,5 +389,10 @@ class SimulatedServer(SimulatedDevice):
         if refusal is not None:
             return codec.error_pdu(frame.invoke_id, codec.SERVICE_WRITE_PROPERTY, refusal[0], refusal[1])
         self.objects[key][property_identifier] = request["value_octets"]
+        if commanded:
+            slots = self.priority_arrays[key]
+            slots[(request["priority"] or self.PRIORITY_DEFAULT) - 1] = None if is_null else request["value_octets"]
+            winning = [value for value in slots if value is not None]
+            self.objects[key][property_identifier] = winning[0] if winning else self.relinquish_defaults[key]
         self.on_write(request)
         return codec.simple_ack(frame.invoke_id, codec.SERVICE_WRITE_PROPERTY)

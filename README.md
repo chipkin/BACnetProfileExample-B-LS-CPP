@@ -23,9 +23,9 @@ that executes a write copies the relevant section here.
 - **[docs/PICS.md](docs/PICS.md)** - the Protocol Implementation Conformance
   Statement: every object, every property, and who answers it.
 
-> **Versions:** this document describes **example v1.2.0**, built and verified
-> against **CAS BACnet Stack 6.0.23** (`6.x` @ `64b2cfac5`), at
-> **Protocol_Revision 30**, with the vendored `common/` helper at **v3.4.0**.
+> **Versions:** this document describes **example v1.3.0**, built and verified
+> against **CAS BACnet Stack 6.0.23** (`6.x` @ `69b6249f`), at
+> **Protocol_Revision 30**, with the vendored `common/` helper at **v3.5.0**.
 > Running the example prints all three - if what it prints disagrees with this
 > line, trust the program and check `CHANGELOG.md`.
 
@@ -53,7 +53,8 @@ Proved by the [Wire Tests](#wire-tests), against a Python Peer that plays device
 3. **Failure Mode - the other device goes offline.** The next WriteGroup still
    writes Jade. `Write_Status` stays IN_PROGRESS while the stack waits for 389016
    (a WriteProperty to Channel 1 meanwhile is refused with BUSY, cl. 12.53.5), and
-   turns FAILED when the write times out (APDU_Timeout, 10 s). The Peer comes back:
+   turns FAILED when the write times out (APDU_Timeout x (Number_Of_APDU_Retries +
+   1): 40 s at the stack's defaults, 10 s x 4). The Peer comes back:
    the next WriteGroup reaches it and `Write_Status` is SUCCESSFUL again.
 4. **Failure Mode - a light refuses the value.** The Peer answers the write with
    an Error, or Jade refuses 150 % (out of range): `Write_Status` is FAILED, and the
@@ -72,27 +73,26 @@ Remote member (device 389016, Lighting Output 1): SimpleACK
 Channel 1 (Garnet) Write_Status = successful
 ```
 
-> **What does not work at this Stack Pin** (stack defects; evidence in
-> [TODO.md](TODO.md), reported by the Wire Tests as `[KNOWN GAP]`):
->
-> - **The Schedule does not drive the lights.** Schedule 1 writes Channel 1's
->   `Present_Value` (100.0 at priority 12 from start-up), but the stack propagates
->   a Channel write to its members only for a WriteGroup. 135-2024 cl. 12.53.5 says
->   any write to `Present_Value` propagates
->   ([stack #3956](https://github.com/chipkin/cas-bacnet-stack/issues/3956)). So
->   L.11.1's "schedule output actions, both in the local device and in other
->   devices" stops at the Channel.
-> - **A WriteProperty to Channel 1** is accepted and stored but, for the same
->   reason, not propagated to Jade or device 389016.
-> - **BUSY goes out with the wrong Error Class** (PROPERTY instead of OBJECT): the
->   application names the code, the stack picks the class.
+> **Every write to Channel 1 is forwarded.** At this Stack Pin the stack propagates
+> a WriteProperty and Schedule 1's write to Channel 1's members exactly as it does a
+> WriteGroup (135-2024 cl. 12.53.5), and `Write_Status` follows each of them
+> (`main.cpp` section 2e). Schedule 1 writes Channel 1 (100.0 at priority 12) on the
+> example's first tick, before device 389016 has answered a Who-Is, so the stack
+> cannot address it and skips its write: Jade takes 100 %, and `Write_Status` reads
+> FAILED until the next write that reaches both members. BUSY goes out with Error
+> Class OBJECT.
 
 ### What is Simulation here
 
 **Simulation**, in this series, means non-BACnet scaffolding that stands in for the physical world. Here it
-is one thing: **Jade has no lamp.** It completes every command at once, so its
-`Tracking_Value` always equals its `Present_Value` and `In_Progress` is always
-`idle`; a real driver would dim the hardware and report the level it reached.
+is one thing: **Jade has no lamp.** Its Lighting Output engine (`main.cpp`
+section 1b, the same engine as the
+[B-LD example](https://github.com/chipkin/BACnetProfileExample-B-LD-CPP)) is real
+BACnet: a `fadeTo` or `rampTo` takes time, with `Tracking_Value` moving and
+`In_Progress` reporting `fadeActive` / `rampActive`; the step, warn, restore and
+toggle operations follow Table 12-67; `NONE` is refused. Only the lamp itself is
+simulated: a blink-warn prints a line instead of flashing a light, and a real
+driver would dim the hardware to `Tracking_Value`.
 Everything the Channel, the WriteGroup, the remote WriteProperty, `Write_Status`
 and the Schedule do is real BACnet. Device 389016 is not part of the example: in
 the Wire Tests it is a Python Peer; on a real network it is any device with a
@@ -107,11 +107,11 @@ device on another port never hears this one's Who-Is).
 | Required BIBB | What it means | How this example does it |
 |---|---|---|
 | **DS-RP-B** | Execute ReadProperty | `SERVICE_READ_PROPERTY`; `GetProperty*` callbacks |
-| **DS-WP-A** | Initiate WriteProperty | the stack, when a WriteGroup reaches Channel 1: its remote reference names device 389016, addressed through the Device_Address_Binding. `main.cpp` never calls `SendWriteProperty`; it follows the answer through the SimpleACK / Error / Reject / Abort / Timeout hooks (Wire Test) |
+| **DS-WP-A** | Initiate WriteProperty | the stack, when a write (WriteGroup, WriteProperty or Schedule 1) reaches Channel 1: its remote reference names device 389016, addressed through the Device_Address_Binding. `main.cpp` never calls `SendWriteProperty`; it follows the answer through the SimpleACK / Error / Reject / Abort / Timeout hooks (Wire Test) |
 | **DS-WP-B** | Execute WriteProperty | `SERVICE_WRITE_PROPERTY`; `SetProperty*` callbacks |
 | **DS-WG-E-B** | Execute WriteGroup (the defining BIBB) | `SERVICE_WRITE_GROUP`; Channel 1 ("Garnet") fans the write out to Jade and device 389016; `Write_Status` follows it (Wire Test) |
 | **DS-ALO-A** | Initiate a write to a remote (lighting) output | the same stack-initiated WriteProperty as DS-WP-A, to device 389016's Lighting Output 1 (Wire Test) |
-| **SCHED-E-B** | Execute a Schedule | Schedule 1 ("Saffron") writes Channel 1's Present_Value at priority 12 (no fan-out at this pin, see above) |
+| **SCHED-E-B** | Execute a Schedule | Schedule 1 ("Saffron") writes Channel 1's Present_Value at priority 12, and the Channel forwards it to Jade and device 389016 (Wire Test) |
 | **DM-DDB-A** | Initiate Who-Is | the stack's Device_Address_Binding, for device 389016, at start-up (Wire Test, Linux); also the `'d'` demo key - `BACnetStack_SendWhoIs` |
 | **DM-DDB-B** | Answer Who-Is with I-Am | Handled by the stack; plus an unsolicited I-Am on start-up |
 | **DM-DOB-B** | Answer Who-Has with I-Have | Handled by the stack |
@@ -125,16 +125,16 @@ SubscribeCOV, alarms and events, trending, backup/restore.
 
 | Object | Instance | Name | Notes |
 |---|---|---|---|
-| Device | 389017 | Chipkin Example B-LS | Configurable with `--deviceID` |
+| Device | 389017 | Chipkin Example B-LS | Configurable with `--deviceID` and `--deviceName` |
 | Analog Input | 1 | Bronze | REAL, °C; read-only; starts at 21.5 |
 | Binary Input | 1 | Emerald | active / inactive; read-only |
 | Multi-State Input | 1 | Hot Pink | state 1..3; read-only |
 | Analog Output | 1 | Chartreuse | REAL setpoint; WRITABLE, commandable |
 | Binary Output | 1 | Fuchsia | active / inactive; WRITABLE, commandable |
 | Multi-State Output | 1 | Indigo | state 1..3; WRITABLE, commandable |
-| Lighting Output | 1 | Jade | REAL 0–100 %; WRITABLE, commandable (from B-LD; the local WriteGroup/Schedule target) |
-| **Channel** | **1** | **Garnet** | **BACnetChannelValue REAL; WRITABLE, commandable - fans a WriteGroup out to Jade AND a remote device (F-CHANNEL / F-EXTWRITE)** |
-| **Schedule** | **1** | **Saffron** | **Writes Channel 1's Present_Value on a timer (F-SCHED-E); at this pin the write is not propagated to Channel 1's members** |
+| Lighting Output | 1 | Jade | REAL 0–100 %; WRITABLE, commandable, `Lighting_Command` (B-LD's Lighting Output engine; the local WriteGroup/Schedule target) |
+| **Channel** | **1** | **Garnet** | **BACnetChannelValue REAL; WRITABLE, commandable - fans every write out to Jade AND a remote device (F-CHANNEL / F-EXTWRITE)** |
+| **Schedule** | **1** | **Saffron** | **Writes Channel 1's Present_Value on a timer (F-SCHED-E); the Channel forwards the write to its members** |
 | **Calendar** | **1** | **Cream** | **A real, independently-readable Calendar object - see [TUTORIAL.md](TUTORIAL.md#troubleshooting) for the one documented gap** |
 | Network Port | 1 | Vermilion | The BACnet/IP port (required) |
 
@@ -144,8 +144,8 @@ one local and one remote object-property reference; an incoming WriteGroup
 fans the write out to every reference; Schedule 1 ("Saffron") writes the same
 Channel's `Present_Value` at 09:00/17:00 daily, and a demo exception event for
 today (from 00:00:05) means it is already writing 100 % when the device starts.
-The Schedule's write is not propagated to the Channel's members at this pin (see
-the note above). The remote write itself is performed by the stack, addressed
+The Channel forwards the Schedule's write to its members like any other (see the
+note above). The remote write itself is performed by the stack, addressed
 through its own Device_Address_Binding, not by application code; the application
 keeps `Write_Status` from the answers (`main.cpp` section 2e) - see
 [TUTORIAL.md](TUTORIAL.md#how-the-remote-write-actually-happens) for the full
@@ -254,30 +254,35 @@ CMake at it: `cmake -B build -S . -D CAS_STACK_DIR=/path/to/cas-bacnet-stack`.
 Expected output:
 
 ```
-BACnet B-LS (Lighting Supervisor) Example - C++ v1.2.0
+BACnet B-LS (Lighting Supervisor) Example - C++ v1.3.0
 CAS BACnet Stack version: 6.0.23.0
-Common helper (common/) version: 3.4.0
+Common helper (common/) version: 3.5.0
 FYI: Listening for BACnet/IP on UDP port 47808 (Network Port 1).
 TX 21 bytes to 192.168.3.255:47808 (broadcast) (Network Port 1) - Unconfirmed: I-Am
 FYI: Device 389017 ("Chipkin Example B-LS") ready. Vendor ID 389. Press 'h' for help.
 FYI: Lighting Output 1 (Jade) starts at 0.0% (off). WriteProperty its
-     Lighting_Command to fade/ramp/step it, or its Present_Value to set a level.
-FYI: Channel 1 (Garnet) fans a WriteGroup out to Jade AND remote device 389016.
+     Lighting_Command to fade/ramp/step/warn it, or its Present_Value to set a level.
+FYI: Channel 1 (Garnet) fans every write out to Jade AND remote device 389016.
      Press 'd' to discover it (Who-Is), then 'w' to fire a demo WriteGroup.
      Schedule 1 (Saffron) writes Channel 1 at 09:00/17:00 daily; a demo
      exception for today (from 00:00:05) has it writing 100% now.
 RX 21 bytes from 192.168.3.64:47808 (Network Port 1) - Unconfirmed: I-Am
 Write: Channel 1 (Garnet) <- 100.00 @ priority 12
-FYI: this write does NOT fan out to Jade or the remote device: at this
-     stack pin only an incoming WriteGroup does (stack defect, TODO.md).
+FYI: remote device 389016 has not answered a Who-Is (no I-Am yet), so the stack
+     cannot address it: its write is skipped and Write_Status will be FAILED.
+Channel 1 (Garnet) Write_Status = in-progress
+WriteProperty: Lighting Output 1 Present_Value <- 100.00 @ priority 12
 TX 20 bytes to 192.168.3.255:47808 (broadcast) (Network Port 1) - Unconfirmed: Who-Is DNET=65535
+Channel 1 (Garnet) Write_Status = failed (the remote member's write did not succeed)
 ```
 
 `Write:` is Schedule 1 writing Channel 1 as soon as the device starts: its demo
 exception event covers today from 00:00:05, so it is already in effect. The
-last line is the stack's Device_Address_Binding looking for device 389016. When
-it answers, the console prints `I-Am: remote device 389016 is at ... - Channel 1
-can write to it now.`
+Channel forwards it to Jade at once; device 389016 is not known yet, so its write
+is skipped and `Write_Status` ends FAILED. The `Who-Is` is the stack's
+Device_Address_Binding looking for device 389016. When it answers, the console
+prints `I-Am: remote device 389016 is at ... - Channel 1 can write to it now.`,
+and the next write to Channel 1 reaches it.
 
 The device listens on UDP **47808** (BACnet/IP). Allow that port through your
 firewall. To use a different port, pass `--port` (see below).
@@ -292,6 +297,8 @@ firewall. To use a different port, pass `--port` (see below).
 |--------|---------|---------|
 | `--port <n>` | `47808` | UDP port to listen on (BACnet/IP). |
 | `--deviceID <n>` | `389017` | The device's BACnet instance number (BACnet requires this to be configurable). |
+| `--deviceName <text>` | `Chipkin Example B-LS` | The Device object's `Object_Name`, 1..255 bytes, no control characters. It must be unique across the BACnet internetwork, so give every unit its own (BACnet requires it to be configurable, like the instance). An invalid value prints a warning and keeps the default. |
+| `--xml` | off | Print every received and sent BACnet message as an indented XML block instead of a one-line summary (very verbose; for protocol debugging). |
 | `--help`, `-h` | - | Show usage and exit. |
 | `--version` | - | Print the example, stack, and `common/` helper versions, then exit. |
 
@@ -333,7 +340,8 @@ UDP port (`REMOTE_DEVICE_INSTANCE` in `main.cpp`; see
 3. **Read Channel 1** - `Channel_Number` / `Control_Groups` return `1` / `[1]`;
    `List_Of_Object_Property_References` returns two entries, one local
    (Lighting Output 1) and one remote (device 389016's Lighting Output 1);
-   `Write_Status` is `idle` until the first WriteGroup.
+   `Write_Status` reads `failed` after Schedule 1's start-up write (device 389016
+   was not known yet) until the next write that reaches both members.
 4. **Write** - a WriteProperty to any writable object (e.g. Analog Output 1's
    `Present_Value`) is accepted; a WriteProperty to a read-only sensor (e.g.
    Analog Input 1) is rejected.
@@ -341,11 +349,11 @@ UDP port (`REMOTE_DEVICE_INSTANCE` in `main.cpp`; see
    `'w'` in the example's console): Jade takes the level, device 389016 receives a
    WriteProperty of its Lighting Output 1 at the same priority, and Channel 1's
    `Write_Status` reads `successful` - or `failed` when 389016 is not there (after
-   the 10 s APDU timeout once it has been found, at once if it never answered a
-   Who-Is).
+   APDU_Timeout x (Number_Of_APDU_Retries + 1), 40 s at the stack's defaults, once
+   it has been found; at once if it never answered a Who-Is).
 6. **Schedule** - at start-up the console logs Schedule 1 writing Channel 1
    (`Write: Channel 1 (Garnet) <- 100.00 @ priority 12`): the demo exception event
-   covers today from 00:00:05. Jade does not change; see the note above.
+   covers today from 00:00:05. Jade takes 100 % at priority 12; see the note above.
 7. A service not in the support table (e.g. SubscribeCOV) is **rejected**.
 
 For the full property-by-property review, the conformance statement, and this
@@ -354,25 +362,32 @@ example's documented verification gaps, see [TUTORIAL.md](TUTORIAL.md).
 ## Wire Tests
 
 Automated, over BACnet/IP, from outside the running example; Python 3 standard
-library only. Two scripts:
+library only. Eight scripts:
 
 - **`channel_fanout_test.py`** - the Profile Function and its Failure Modes, as in
   [the scenario](#the-scenario-one-writegroup-two-lights-one-of-them-on-another-device):
   a Python Peer plays device 389016 (it hears the example's broadcasts on Linux and
   macOS; on Windows it announces itself with an I-Am instead), a Python client sends
-  the WriteGroups. 19 counted checks on Linux (18 on Windows, which cannot hear a
-  broadcast) and 5 `[KNOWN GAP]` lines for the stack defects in [TODO.md](TODO.md).
+  the WriteGroups and WriteProperty requests. 30 counted checks on Linux (29 on
+  Windows, which cannot hear a broadcast).
+- **`fade_test.py`, `ramp_step_test.py`, `stop_priority_test.py`, `warn_test.py`,
+  `refusal_test.py`** - Jade's `Lighting_Command` operations, refusals and
+  timing (the B-LD example's Lighting Output tests; see
+  [tests/README.md](tests/README.md)).
 - **`discovery_test.py`** - what a client such as Explorer does when it discovers a
   device: Who-Is, the Device's `Object_List`, then every object's `Property_List`
   and a ReadProperty of every property it lists. Every read must come back as a value.
+- **`configuration_test.py`** - the command line: `--deviceID` and `--deviceName`
+  set the Device's instance and Object_Name at start-up (Who-Is, ReadProperty and
+  Who-Has see them; a write of the name is refused), invalid names keep the
+  default, and `--help` lists exactly the options the example reads.
 
 ```bash
 python3 tests/run_wire_tests.py --exe build/BACnetExampleBLS          # Linux/macOS
-python tests
-un_wire_tests.py --exe build\Release\BACnetExampleBLS.exe   # Windows
+python tests\run_wire_tests.py --exe build\Release\BACnetExampleBLS.exe   # Windows
 ```
 
-It ends with `ALL WIRE TESTS PASSED` (exit 0) in about 30 seconds (the offline
+It ends with `ALL WIRE TESTS PASSED` (exit 0) in about a minute and a half (the offline
 member's write has to time out). CI runs it on Linux after the smoke test.
 [tests/README.md](tests/README.md) says what each check proves and how each was
 shown to fail without the feature it checks.
@@ -471,11 +486,11 @@ Client-side profiles.
 
 | | |
 |---|---|
-| Example version | 1.2.0 |
-| `common/` helper | 3.4.0 |
-| CAS BACnet Stack | 6.0.23 — pinned at `6.x` @ `64b2cfac5`, compiled from source with `STACK_OPTION_WRITE_GROUP` |
+| Example version | 1.3.0 |
+| `common/` helper | 3.5.0 |
+| CAS BACnet Stack | 6.0.23 — pinned at `6.x` @ `69b6249f`, compiled from source with `STACK_OPTION_WRITE_GROUP` |
 | Protocol_Revision | 30 (the stack default at the pin) |
-| Verified on | Windows (MSVC, VS 18, STATIC) and Linux (g++, WSL Ubuntu 22.04, SOURCE), 2026-10-15 |
+| Verified on | Windows (MSVC, VS 18, SOURCE), 2026-10-27 |
 
 ## References
 

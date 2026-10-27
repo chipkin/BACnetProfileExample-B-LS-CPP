@@ -68,6 +68,11 @@ SERVICE_REINITIALIZE_DEVICE = 20
 # ReinitializeDevice 'Reinitialized State of Device' (cl. 16.4.1.1.1).
 REINITIALIZE_COLDSTART = 0
 REINITIALIZE_WARMSTART = 1
+REINITIALIZE_START_BACKUP = 2
+REINITIALIZE_END_BACKUP = 3
+REINITIALIZE_START_RESTORE = 4
+REINITIALIZE_END_RESTORE = 5
+REINITIALIZE_ABORT_RESTORE = 6
 REINITIALIZE_ACTIVATE_CHANGES = 7
 
 # Unconfirmed service choices (cl. 21).
@@ -77,18 +82,34 @@ SERVICE_WRITE_GROUP = 10             # BACnetUnconfirmedServiceChoice write-grou
 
 OBJECT_TYPE_ANALOG_INPUT = 0
 OBJECT_TYPE_ANALOG_OUTPUT = 1
+OBJECT_TYPE_ANALOG_VALUE = 2
 OBJECT_TYPE_BINARY_INPUT = 3
 OBJECT_TYPE_BINARY_OUTPUT = 4
+OBJECT_TYPE_BINARY_VALUE = 5
+OBJECT_TYPE_CALENDAR = 6
 OBJECT_TYPE_DEVICE = 8
+OBJECT_TYPE_FILE = 10
 OBJECT_TYPE_GROUP = 11
 OBJECT_TYPE_MULTI_STATE_INPUT = 13
+OBJECT_TYPE_MULTI_STATE_OUTPUT = 14
+OBJECT_TYPE_NOTIFICATION_CLASS = 15
+OBJECT_TYPE_SCHEDULE = 17
+OBJECT_TYPE_MULTI_STATE_VALUE = 19
+OBJECT_TYPE_LIFE_SAFETY_POINT = 21
+OBJECT_TYPE_LIFE_SAFETY_ZONE = 22
+OBJECT_TYPE_EVENT_LOG = 25
+OBJECT_TYPE_LIGHTING_OUTPUT = 54
 OBJECT_TYPE_NETWORK_PORT = 56
+OBJECT_TYPE_ELEVATOR_GROUP = 57
+OBJECT_TYPE_ESCALATOR = 58
+OBJECT_TYPE_LIFT = 59
 
 PROPERTY_DESCRIPTION = 28
 PROPERTY_DEVICE_ADDRESS_BINDING = 30
 PROPERTY_EVENT_STATE = 36
 PROPERTY_LIST_OF_GROUP_MEMBERS = 53
 PROPERTY_LIST_OF_OBJECT_PROPERTY_REFERENCES = 54
+PROPERTY_NUMBER_OF_APDU_RETRIES = 73
 PROPERTY_OBJECT_IDENTIFIER = 75
 PROPERTY_OBJECT_LIST = 76
 PROPERTY_OBJECT_NAME = 77
@@ -97,28 +118,65 @@ PROPERTY_PRESENT_VALUE = 85
 PROPERTY_PRIORITY_ARRAY = 87
 PROPERTY_RELIABILITY = 103
 PROPERTY_RELINQUISH_DEFAULT = 104
+PROPERTY_STATE_TEXT = 110
 PROPERTY_STATUS_FLAGS = 111
+PROPERTY_SYSTEM_STATUS = 112
+PROPERTY_UNITS = 117
+PROPERTY_LOG_BUFFER = 131
+PROPERTY_ENABLE = 133
+PROPERTY_RECORD_COUNT = 141
+PROPERTY_TOTAL_RECORD_COUNT = 145
+PROPERTY_MODE = 160
+PROPERTY_OPERATION_EXPECTED = 161
+PROPERTY_SILENCED = 163
+PROPERTY_TRACKING_VALUE = 164
+PROPERTY_ZONE_MEMBERS = 165
 PROPERTY_PROPERTY_LIST = 371
+PROPERTY_LIGHTING_COMMAND = 380
 PROPERTY_NETWORK_NUMBER = 425
 PROPERTY_NETWORK_NUMBER_QUALITY = 426
 PROPERTY_CURRENT_COMMAND_PRIORITY = 431
+PROPERTY_ASSIGNED_LANDING_CALLS = 447
+PROPERTY_LANDING_CALLS = 470
+PROPERTY_LANDING_CALL_CONTROL = 471
 
+ERROR_CLASS_DEVICE = 0
 ERROR_CLASS_OBJECT = 1
 ERROR_CLASS_PROPERTY = 2
+ERROR_CLASS_RESOURCES = 3
+ERROR_CLASS_SECURITY = 4
 ERROR_CLASS_SERVICES = 5
+ERROR_CODE_DYNAMIC_CREATION_NOT_SUPPORTED = 4
+ERROR_CODE_NO_SPACE_FOR_OBJECT = 18
+ERROR_CODE_OBJECT_DELETION_NOT_PERMITTED = 23
+ERROR_CODE_OBJECT_IDENTIFIER_ALREADY_EXISTS = 24
+ERROR_CODE_PASSWORD_FAILURE = 26
+ERROR_CODE_SERVICE_REQUEST_DENIED = 29
 ERROR_CODE_UNKNOWN_OBJECT = 31
 ERROR_CODE_UNKNOWN_PROPERTY = 32
+ERROR_CODE_UNSUPPORTED_OBJECT_TYPE = 36
 ERROR_CODE_VALUE_OUT_OF_RANGE = 37
 ERROR_CODE_WRITE_ACCESS_DENIED = 40
+ERROR_CODE_INVALID_ARRAY_INDEX = 42
 ERROR_CODE_LIST_ELEMENT_NOT_FOUND = 81
 ERROR_CODE_BUSY = 82
+ERROR_CODE_INVALID_OPERATION_IN_THIS_STATE = 139
+
+# BACnetRejectReason and BACnetAbortReason (cl. 21) - what reject_pdu / abort_pdu carry.
+REJECT_REASON_UNRECOGNIZED_SERVICE = 9
+ABORT_REASON_SEGMENTATION_NOT_SUPPORTED = 4
 
 MAX_INSTANCE = 0x3FFFFF
 
-# BACnetReliability (cl. 21) - the two values a gateway reports most.
+# BACnetReliability (cl. 21) - the values the examples report.
 RELIABILITY_NO_FAULT_DETECTED = 0
 RELIABILITY_UNRELIABLE_OTHER = 7
+RELIABILITY_MULTI_STATE_FAULT = 9    # the FAULT_LIFE_SAFETY algorithm's fault
 RELIABILITY_COMMUNICATION_FAILURE = 12
+
+# BACnetDeviceStatus (cl. 21) - System_Status values a backup / restore passes through.
+DEVICE_STATUS_OPERATIONAL = 0
+DEVICE_STATUS_BACKUP_IN_PROGRESS = 5
 
 # BACnetStatusFlags bit positions (cl. 21): bit 0 is the first bit of the BIT STRING.
 STATUS_FLAG_IN_ALARM = 0
@@ -351,10 +409,16 @@ def i_am(device_instance, vendor_identifier, max_apdu=1476, segmentation=3):
 
 
 def read_access_specification(object_type, instance, property_identifiers):
-    """One BACnetReadAccessSpecification (cl. 21) - e.g. an element of List_Of_Group_Members."""
+    """One BACnetReadAccessSpecification (cl. 21) - e.g. an element of List_Of_Group_Members,
+    or one object of a ReadPropertyMultiple-Request. Each entry of `property_identifiers` is a
+    property identifier, or (0.7.0) a (property identifier, array index) pair for
+    propertyArrayIndex [1]; (property, None) is the same as the bare identifier."""
     out = context_object_id(0, object_type, instance) + opening(1)
-    for property_identifier in property_identifiers:
+    for reference in property_identifiers:
+        property_identifier, array_index = reference if isinstance(reference, tuple) else (reference, None)
         out += context_unsigned(0, property_identifier)
+        if array_index is not None:
+            out += context_unsigned(1, array_index)
     return out + closing(1)
 
 
@@ -370,6 +434,58 @@ def simple_ack(invoke_id, service):
     """A SimpleACK APDU (cl. 20.1.4) for confirmed service `service`."""
     return bytes([PDU_SIMPLE_ACK << 4, invoke_id, service])
 
+
+def reject_pdu(invoke_id, reason):
+    """A Reject PDU (cl. 20.1.8): type 6, the invoke id it answers, the reject reason (B-OD, 0.7.0)."""
+    return bytes([PDU_REJECT << 4, invoke_id, reason])
+
+
+def abort_pdu(invoke_id, reason, server=True):
+    """An Abort PDU (cl. 20.1.9): type 7 with the SRV bit set when the server sends it (B-OD, 0.7.0)."""
+    return bytes([(PDU_ABORT << 4) | (1 if server else 0), invoke_id, reason])
+
+
+def _signed_octets(value):
+    for length in (1, 2, 3, 4):
+        if -(1 << (8 * length - 1)) <= value < (1 << (8 * length - 1)):
+            return value.to_bytes(length, "big", signed=True)
+    raise ValueError(value)
+
+
+def application_signed(value):
+    """An application-tagged INTEGER (cl. 20.2.5), shortest two's-complement form (B-AEC, 0.7.0)."""
+    body = _signed_octets(value)
+    return bytes([0x30 | len(body)]) + body
+
+
+def application_octet_string(octets):
+    """An application-tagged OCTET STRING (cl. 20.2.8) (B-AEC, 0.7.0)."""
+    if len(octets) < 5:
+        return bytes([0x60 | len(octets)]) + octets
+    if len(octets) < 254:
+        return bytes([0x65, len(octets)]) + octets
+    return bytes([0x65, 254]) + struct.pack(">H", len(octets)) + octets
+
+
+def context_signed(tag, value):
+    body = _signed_octets(value)
+    return bytes([(tag << 4) | 0x08 | len(body)]) + body
+
+
+def context_real(tag, value):
+    """A context-tagged REAL (cl. 20.2.6) (B-LD and B-OD, 0.7.0)."""
+    return bytes([(tag << 4) | 0x08 | 4]) + struct.pack(">f", value)
+
+
+def context_boolean(tag, value):
+    """A context-tagged BOOLEAN: one content octet, unlike the application form (cl. 20.2.3)."""
+    return bytes([(tag << 4) | 0x08 | 1, 1 if value else 0])
+
+
+def context_bit_string(tag, bits):
+    """A context-tagged BIT STRING, bit 0 first (cl. 20.2.10)."""
+    body = application_bit_string(bits)[1:]   # the application form is 0x8L + body
+    return bytes([(tag << 4) | 0x08 | len(body)]) + body
 
 def application_bit_string(bits):
     """BIT STRING (cl. 20.2.10), bit 0 first."""
@@ -631,16 +747,39 @@ def read_property_value(apdu):
     return None
 
 
-def parse_read_property_request(apdu):
-    """(object_type, instance, property_identifier) from a ReadProperty request APDU, or None."""
+def parse_read_property_request(apdu, with_array_index=False):
+    """(object_type, instance, property_identifier) from a ReadProperty request APDU, or None.
+    With `with_array_index=True` (0.7.0): (object_type, instance, property_identifier,
+    array_index or None) - propertyArrayIndex [2] (cl. 15.5.1.1.3), which the default form
+    drops, as 0.6.0 did."""
     try:
         position = 4
         _, _, _, body, position = read_tag(apdu, position)
         raw = struct.unpack(">I", body)[0]
         _, _, _, property_octets, position = read_tag(apdu, position)
-        return raw >> 22, raw & MAX_INSTANCE, int.from_bytes(property_octets, "big")
+        parsed = (raw >> 22, raw & MAX_INSTANCE, int.from_bytes(property_octets, "big"))
+        if not with_array_index:
+            return parsed
+        array_index = None
+        if position < len(apdu):
+            number, is_context, kind, body, position = read_tag(apdu, position)
+            if is_context and number == 2 and kind == "value":
+                array_index = int.from_bytes(body, "big")
+        return parsed + (array_index,)
     except (IndexError, struct.error):
         return None
+
+
+def application_elements(octets):
+    """Split a run of application-tagged primitives (a list or array value) into one octet
+    string per element, each still tagged (B-OD, 0.7.0)."""
+    elements = []
+    position = 0
+    while octets and position < len(octets):
+        start = position
+        position = read_tag(octets, position)[4]
+        elements.append(octets[start:position])
+    return elements
 
 
 def application_values(octets):

@@ -9,6 +9,9 @@ import tempfile
 import time
 from pathlib import Path
 
+from .codec import i_am_device_instance
+from .endpoint import broadcast_listener
+
 # common/'s console line for every frame it sends, e.g.
 #   TX 21 bytes to 192.168.3.255:47808 (broadcast) (Network Port 1) - Unconfirmed: I-Am
 TX_BROADCAST = re.compile(r"TX \d+ bytes to (\d+\.\d+\.\d+\.\d+):(\d+) \(broadcast\)")
@@ -37,6 +40,19 @@ class Program:
                 return text in self.output()
             time.sleep(0.1)
         return False
+
+    def wait_for_text(self, text, seconds, after=0):
+        """Wait until `text` appears in the console after offset `after`; return the offset just
+        past it, or None. Pass the returned offset as the next `after` so each check only matches
+        output produced after the previous one (0.7.0, B-OD)."""
+        deadline = time.monotonic() + seconds
+        while True:
+            found = self.output().find(text, after)
+            if found >= 0:
+                return found + len(text)
+            if time.monotonic() >= deadline or self.process.poll() is not None:
+                return None
+            time.sleep(0.1)
 
     def wait_ready(self, seconds=20):
         """Every example prints a line containing 'ready' once it is on the network."""
@@ -75,6 +91,46 @@ def start(exe, arguments, label, environment=None):
         program.stop()
         sys.exit(f"{label} did not reach 'ready' - see its console above")
     return program
+
+
+class IAmBroadcasts:
+    """Counts a device's unsolicited I-Am broadcasts (a heartbeat) from a mark onwards - on the
+    wire where a second socket can share the example's port (Linux/macOS, through
+    endpoint.broadcast_listener), and on every platform in the example's console, whose
+    common/ TX line is printed for each datagram actually sent and never for one the stack
+    refused. `counts()` is (on the wire, or None on Windows; in the console).
+    (0.7.0, B-ASC's Heartbeats.)"""
+
+    def __init__(self, program, port, device_instance):
+        self.program = program
+        self.device_instance = device_instance
+        self.console_line = re.compile(rf"TX \d+ bytes to [\d.]+:{port} \(broadcast\)[^\n]*I-Am")
+        broadcast_ip = broadcast_address(program.output(), port)
+        self.listener = broadcast_listener(broadcast_ip, port) if os.name != "nt" and broadcast_ip else None
+        self.mark()
+
+    def mark(self):
+        self.console_offset = len(self.program.output())
+        if self.listener is not None:
+            self.listener.clear()
+
+    def counts(self):
+        console = len(self.console_line.findall(self.program.output()[self.console_offset:]))
+        if self.listener is None:
+            return None, console
+        self.listener.collect(0.05)
+        wire = sum(1 for frame in self.listener.frames if i_am_device_instance(frame.payload) == self.device_instance)
+        return wire, console
+
+    def watch(self, seconds):
+        """Mark, wait `seconds`, and return counts()."""
+        self.mark()
+        time.sleep(seconds)
+        return self.counts()
+
+    def close(self):
+        if self.listener is not None:
+            self.listener.close()
 
 
 def broadcast_address(output, port):

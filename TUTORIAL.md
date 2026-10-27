@@ -26,7 +26,9 @@ string in `GetPropertyCharString`).
 **Change the device identity before you ship** - vendor ID, vendor name, model
 name, description, firmware revision and device name are all in the
 `CHANGE ALL OF THIS BEFORE YOU SHIP` block at the top of `main.cpp`, with a
-per-field note on each saying what to change it to. That block is the
+per-field note on each saying what to change it to. The device name there is
+only the default: each unit takes its own with `--deviceName` at start-up, as
+it takes its instance with `--deviceID`. That block is the
 authoritative checklist; it is in the source rather than here so it cannot be
 skipped by someone who only reads the code.
 
@@ -63,12 +65,11 @@ Channel's `Priority_Array`, a property a Channel does not have) and writes it au
 at 09:00/17:00 daily (`AddScheduleWeeklyTimeValue`), plus a demo exception
 event for today from 00:00:05, which is already in effect when the device
 starts. A Schedule-driven write to Channel 1 goes through the same mechanism as
-a direct WriteProperty to Channel 1, and at stack `6.x` @ `64b2cfac5` **neither
-is propagated to the Channel's members** - only an actual WriteGroup service
-request fans out (see #2). That is a stack defect, not BACnet's design:
-135-2024 cl. 12.53.5 says "When Present_Value is written, the Channel object
-shall propagate that value to each of the members in the
-List_Of_Object_Property_References". It is recorded in [TODO.md](TODO.md). Combine
+a direct WriteProperty to Channel 1, and **both are propagated to the Channel's
+members** like a WriteGroup: 135-2024 cl. 12.53.5 says "When Present_Value is
+written, the Channel object shall propagate that value to each of the members in
+the List_Of_Object_Property_References" (the stack did this only for a WriteGroup
+before the `6.x` @ `4238a39f` Stack Pin; [TODO.md](TODO.md) "Fixed upstream"). Combine
 a Schedule with a WriteGroup by having the Schedule target a Channel that a
 WriteGroup ALSO targets, same as this example does with Channel 1 itself, via
 the `'w'` key's demo.
@@ -129,27 +130,29 @@ IN_PROGRESS. At the end of writing all values, Write_Status shall change to
 SUCCESSFUL or FAILED based on the results of these writes." The application can
 see every one of those writes, so `main.cpp` section 2e keeps it:
 
-- **The start.** The stack calls `WriteGroupInhibitDelay` for Channel 1 just
-  before it writes the Channel for a WriteGroup, then calls `SetPropertyReal` /
-  `SetPropertyNull` for the Channel, then for each local member, all inside one
-  `BACnetStack_Tick()`. The callback sets a flag; the Channel's Set callback, seeing
-  it, sets `Write_Status` = IN_PROGRESS.
+- **The start.** Every write to Channel 1 - a WriteGroup, a WriteProperty or
+  Schedule 1's - reaches `SetPropertyReal` / `SetPropertyNull` for the Channel, and the
+  stack then writes each member, all inside one `BACnetStack_Tick()`. The Channel's
+  Set callback sets `Write_Status` = IN_PROGRESS; the main loop closes the fan-out
+  after the tick. (For a WriteGroup the stack also calls `WriteGroupInhibitDelay`
+  first; that only labels the console line.)
 - **The local member.** Jade's Set callback accepts the value or refuses it (a level
   outside 0..100 %). A refusal marks the fan-out failed.
 - **The remote member.** The stack sends a confirmed WriteProperty. Its answer comes
   back through `HookSimpleAck`, `HookError`, `HookReject`, `HookAbort`, or - when
   device 389016 never answers - `HookTimeout`, after APDU_Timeout x
-  (Number_Of_APDU_Retries + 1) (10 s x 1 with the stack's defaults). The hooks
+  (Number_Of_APDU_Retries + 1) (10 s x 4 = 40 s with the stack's defaults at
+  6.x 4238a39f, which retries a confirmed request 3 times). The hooks
   match the answer by the address `HookIAm` recorded for 389016. If 389016 has never
   sent an I-Am, the stack skips it, and the fan-out is failed at once.
 - **The end.** Once no answer is outstanding, `Write_Status` is SUCCESSFUL, or
   FAILED if any write failed.
 - **BUSY.** A WriteProperty of Channel 1 `Present_Value` while IN_PROGRESS is refused
-  with Error Code BUSY (cl. 12.53.5). The stack sends it with class PROPERTY rather
-  than OBJECT (stack defect, [TODO.md](TODO.md)).
+  with Error Class OBJECT, Error Code BUSY (cl. 12.53.5).
 
-A WriteProperty or Schedule write to Channel 1 leaves `Write_Status` alone: at this
-pin the stack does not forward it, so nothing is in progress.
+At start-up Schedule 1 writes Channel 1 before device 389016 has answered a Who-Is,
+so its write to 389016 is skipped and `Write_Status` reads FAILED until the next
+write that reaches both members.
 
 ## What each object type needs you to serve
 
@@ -162,7 +165,7 @@ It differs per type — this is the checklist, so you do not have to infer it:
 | Binary Input | `Present_Value` (Enumerated), `Object_Name` | `Polarity` |
 | Multi-State Input | `Present_Value` (Unsigned), `Object_Name` | `Number_Of_States` |
 | Analog/Binary/Multi-State Output | `Object_Name`, `Relinquish_Default` | `Units`/`Polarity`/`Number_Of_States`; `Present_Value`/`Priority_Array`/`Current_Command_Priority` are resolved by the stack from the Priority_Array the app maintains |
-| Lighting Output | `Object_Name`, `Tracking_Value`, `Lighting_Command`, `In_Progress`, the dimming defaults (`Blink_Warn_Enable`, `Egress_Time`, `Egress_Active`, `Default_Fade_Time`, `Default_Ramp_Rate`, `Default_Step_Increment`, `Lighting_Command_Default_Priority`), `Relinquish_Default` | `Present_Value`/`Priority_Array` resolved by the stack |
+| Lighting Output | `Object_Name`, `Tracking_Value`, `Lighting_Command`, `In_Progress`, the dimming defaults (`Blink_Warn_Enable`, `Egress_Time`, `Egress_Active`, `Default_Fade_Time`, `Default_Ramp_Rate`, `Default_Step_Increment`, `Lighting_Command_Default_Priority`), `Last_On_Value`, `Default_On_Value`, `Relinquish_Default` | `Present_Value`/`Priority_Array` resolved by the stack; the Lighting Output engine (`main.cpp` section 1b) carries out each `Lighting_Command` over time |
 | Channel | `Object_Name`, `Last_Priority`, `Write_Status`, `Channel_Number`, `Control_Groups` | `List_Of_Object_Property_References` set with `BACnetStack_AddObjectPropertyReferenceToChannel`, not a callback |
 | Schedule | `Object_Name`, `Out_Of_Service` | everything else configured through the dedicated `BACnetStack_AddScheduleObject*` API, not a callback |
 | Calendar | `Object_Name`, `Present_Value` | `Date_List` is a documented gap - see [Troubleshooting](#troubleshooting) |
@@ -266,7 +269,7 @@ not in `accepted`, comes out as a ⚠ row - that is a defect, not a feature.
 | On start-up the app prints a wall of red `Error:` lines but the device works | **Expected — this is not your bug.** This is the stack's own debug logging: the device receives its **own** broadcast I-Am and logs a decode cascade, and a one-time UUID notice for the BACnet/SC datalink this IP-only example never configures. On a healthy start-up roughly half the output is these lines. |
 | Pressing `'s'` does nothing | This is a real gap, not a misunderstanding - see the note in [How Channel + WriteGroup + Schedule drive a remote write](#how-channel--writegroup--schedule-drive-a-remote-write). The demo exception event (today from 00:00:05) is in effect from start-up anyway. |
 | The example exits at start-up with `Error: Failed to enable the WriteGroup service.` | The stack was built without `STACK_OPTION_WRITE_GROUP`; its default preset leaves WriteGroup out. Use the default SOURCE build (`CMakeLists.txt` defines it), or rebuild your prebuilt stack library with it (README "Build"). |
-| A WriteProperty to Channel 1, or the Schedule's write, does not change Jade | At stack `6.x` @ `64b2cfac5` only a WriteGroup propagates to the Channel's members; cl. 12.53.5 says any Present_Value write should. Stack defect, see [TODO.md](TODO.md). Use `'w'` (a WriteGroup) to see the fan-out. |
+| `Write_Status` reads `failed` right after start-up | Schedule 1 wrote Channel 1 on the first tick, before device 389016 answered a Who-Is, so the stack could not address it and skipped its write (cl. 12.53.7). The next write to Channel 1 (a WriteProperty, `'w'`, or the Schedule's next transition) reaches both members once 389016 is known. |
 | Calendar 1 ("Cream")'s `Date_List` always reads empty / `Present_Value` always reads `false` | This example adds Calendar 1 with plain `BACnetStack_AddObject` and puts nothing in its `Date_List`, so it is empty and `Present_Value` is `false`. The stack has since gained a stack-held Calendar (`BACnetStack_AddCalendarObject` and its `AddCalendarDateList*` exports; stack issues [#2034](https://github.com/chipkin/cas-bacnet-stack/issues/2034) and [#963](https://github.com/chipkin/cas-bacnet-stack/issues/963) are closed), which this example does not use yet. Schedule 1's exception event uses the direct date form (`AddScheduleExceptionEventWithCalendarEntry`), so it does not depend on the Calendar. |
 | A WriteGroup / remote write does not seem to reach the second device | The stack's Device_Address_Binding must have resolved the remote device's address first: the console prints `I-Am: remote device 389016 is at ...` when it has. The stack's own Who-Is goes out at start-up (then hourly); `'d'` sends another. The second device must be on the same subnet AND the same UDP port - a device on another port never hears a broadcast. `Write_Status` reads `failed` after a WriteGroup that could not reach it. See [How the remote write actually happens](#how-the-remote-write-actually-happens). |
 | CMake error: *"CAS BACnet Stack adapter not found under: ..."* | Submodules not initialized. Run `git submodule update --init --recursive` (or pass `-D CAS_STACK_DIR=...`). |
